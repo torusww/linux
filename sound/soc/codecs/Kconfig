@@ -1092,6 +1092,11 @@ config SND_SOC_WM9713
 	tristate
 	select REGMAP_AC97
 
+config SND_SOC_HIFIBERRY_DACPLUS
+	tristate "Support for HifiBerry DAC+"
+	select SND_SOC_PCM512x
+
+
 # Amp
 config SND_SOC_LM4857
 	tristate
