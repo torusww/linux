@@ -304,6 +304,7 @@ static int snd_rpi_hifiberry_dacplus_probe(struct platform_device *pdev)
 	snd_rpi_hifiberry_dacplus.dev = &pdev->dev;
 	if (pdev->dev.of_node) {
 		struct device_node *i2s_node;
+		struct device_node *codec_node;
 		struct snd_soc_dai_link *dai;
 
 		dai = &snd_rpi_hifiberry_dacplus_dai[0];
@@ -315,6 +316,14 @@ static int snd_rpi_hifiberry_dacplus_probe(struct platform_device *pdev)
 			dai->cpu_of_node = i2s_node;
 			dai->platform_name = NULL;
 			dai->platform_of_node = i2s_node;
+		}
+
+		codec_node = of_parse_phandle(pdev->dev.of_node,
+			"i2s-codec", 0);
+
+		if (codec_node) {
+			dai->codec_name = NULL;
+			dai->codec_of_node = codec_node;
 		}
 
 		digital_gain_0db_limit = !of_property_read_bool(
