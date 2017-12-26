@@ -267,7 +267,7 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate)
 			     I2S_CLKD_A83T_MCLKOEN | I2S_CLKD_MCLKDIV(i));
 	} else {
 		regmap_write(priv->regmap, I2S_CLKD,
-			     I2S_CLKD_H3_MCLKOEN | I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
+			     I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
 	}
 
 	/* format */
@@ -576,6 +576,12 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 			regmap_update_bits(priv->regmap, I2S_CLKD,
 					   I2S_CLKD_H3_MCLKOEN,
 					   I2S_CLKD_H3_MCLKOEN);
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_BCLKOUT,
+					   I2S_CTL_H3_BCLKOUT);
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_LRCKOUT,
+					   I2S_CTL_H3_LRCKOUT);
 		}
 		break;
 	case SND_SOC_DAIFMT_CBM_CFM:
@@ -587,11 +593,43 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 			regmap_update_bits(priv->regmap, I2S_CLKD,
 					   I2S_CLKD_H3_MCLKOEN,
 					   0);
-		}
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_BCLKOUT,
+					   0);
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_LRCKOUT,
+					   0);
+		}	
+		break;
+	case SND_SOC_DAIFMT_CBM_CFS:
+		/* Bclk Slave / LRclk master */
+		if (priv->type == SOC_A83T) {
+			// TODO
+			return -EINVAL;
+		} else {
+			regmap_update_bits(priv->regmap, I2S_CLKD,
+					   I2S_CLKD_H3_MCLKOEN,
+					   0);
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_BCLKOUT,
+					   0);
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_LRCKOUT,
+					   I2S_CTL_H3_LRCKOUT);
+		}	
 		break;
 	default:
 		return -EINVAL;
 	}
+
+	return 0;
+}
+
+static int sun8i_i2s_set_bclk_ratio(struct snd_soc_dai *dai,
+				      unsigned int ratio)
+{
+	struct snd_soc_card *card = snd_soc_dai_get_drvdata(dai);
+	struct priv *priv = snd_soc_card_get_drvdata(card);
 
 	return 0;
 }
@@ -677,6 +715,7 @@ static int sun8i_i2s_trigger(struct snd_pcm_substream *substream,
 static const struct snd_soc_dai_ops sun8i_i2s_dai_ops = {
 	.hw_params	= sun8i_i2s_hw_params,
 	.set_fmt	= sun8i_i2s_set_fmt,
+	.set_bclk_ratio = sun8i_i2s_set_bclk_ratio,
 	.shutdown	= sun8i_i2s_shutdown,
 	.startup	= sun8i_i2s_startup,
 	.trigger	= sun8i_i2s_trigger,
@@ -864,7 +903,11 @@ static int sun8i_card_create(struct device *dev, struct priv *priv)
 	codec->of_node = sun8i_get_codec(dev);
 	if (!codec->of_node) {
 		dev_err(dev, "no port node\n");
-		return -ENXIO;
+		card->dev = dev;
+		dev_set_drvdata(dev, card);
+		snd_soc_card_set_drvdata(card, priv);
+// fix me. memory leak
+		return 0;
 	}
 	DBGOUT("%s: codec_name=\"%s\"\n", __func__, codec->of_node->name);
 
