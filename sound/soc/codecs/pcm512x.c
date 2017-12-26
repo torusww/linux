@@ -554,7 +554,7 @@ static int pcm512x_dai_startup_master(struct snd_pcm_substream *substream,
 	if (!rats_no_pll)
 		return -ENOMEM;
 	constraints_no_pll->rats = rats_no_pll;
-	rats_no_pll->num = clk_get_rate(pcm512x->sclk) / 64;
+	rats_no_pll->num = 384000; // fix me (384k freq issue)
 	rats_no_pll->den_min = 1;
 	rats_no_pll->den_max = 128;
 	rats_no_pll->den_step = 1;
@@ -859,6 +859,12 @@ static int pcm512x_set_dividers(struct snd_soc_dai *dai,
 		dev_err(dev, "No LRCLK?\n");
 		return -EINVAL;
 	}
+
+	// fix me. slot width round up over 16bit
+	if (lrclk_div > 32) {
+		lrclk_div=64;
+	}
+
 
 	if (!pcm512x->pll_out) {
 		sck_rate = clk_get_rate(pcm512x->sclk);
