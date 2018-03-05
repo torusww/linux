@@ -919,7 +919,9 @@ static int sun8i_card_create(struct device *dev, struct priv *priv)
 		card->dev = dev;
 		dev_set_drvdata(dev, card);
 		snd_soc_card_set_drvdata(card, priv);
-// fix me. memory leak
+		// free
+		devm_kfree(dev, dai_link);
+		devm_kfree(dev, codec);
 		return 0;
 	}
 	DBGOUT("%s: codec_name=\"%s\"\n", __func__, codec->of_node->name);
