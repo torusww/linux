@@ -79,6 +79,7 @@
 	#define I2S_FAT0_H3_SR_MSK		(7 << 4)
 	#define I2S_FAT0_H3_SW_16		(3 << 0)
 	#define I2S_FAT0_H3_SW_32		(7 << 0)
+	#define I2S_FAT0_H3_SW(v)		(((v>>2)-1) << 0)
 	#define I2S_FAT0_H3_SW_MSK		(7 << 0)
 
 #define I2S_FAT1		0x08
@@ -145,6 +146,13 @@
 #define PCM_LRCK_PERIOD 32
 #define PCM_LRCKR_PERIOD 1
 
+#define PCM_LRCK_PERIOD_MAP_SHIFT 1 // period resolution 2bit
+#define PCM_LRCK_PERIOD_MAP_RESOLUTION (1 << PCM_LRCK_PERIOD_MAP_SHIFT)
+#define PCM_LRCK_PERIOD_MAP_MIN        PCM_LRCK_PERIOD_MAP_RESOLUTION
+#define PERIOD_TO_MAP(period)          (1 << (((unsigned int)period) >> PCM_LRCK_PERIOD_MAP_SHIFT))
+
+
+
 #define SOC_A83T 0
 #define SOC_H3 1
 #define SOC_H5 2
@@ -159,6 +167,12 @@ struct priv {
 	int nchan;
 
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
+
+	unsigned int lrclk_period_map;
+	unsigned int mclk_mode;
+	unsigned int mclk_max_freq;
+	unsigned int dai_fmt;
+	unsigned int rj_slotwidth;
 };
 
 static const struct of_device_id sun8i_i2s_of_match[] = {
@@ -233,45 +247,105 @@ static void sun8i_i2s_init(struct priv *priv)
 	}
 }
 
-static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate)
+static int sun8i_i2s_lrclk_period_minimum_match(struct priv *priv, int sample_resolution)
+{
+	int min_match  = sample_resolution;
+	int max_period = PCM_LRCK_PERIOD;
+
+	// check max_period
+	while ( (max_period > PCM_LRCK_PERIOD_MAP_RESOLUTION) && !(priv->lrclk_period_map & PERIOD_TO_MAP(max_period)) )
+		max_period -= PCM_LRCK_PERIOD_MAP_RESOLUTION ;
+	if ( sample_resolution > max_period ) {
+		DBGOUT("%s: sample resolution round down %dbit to %dbit(max fs/2)", __func__, sample_resolution, max_period);
+		return max_period;
+	}
+
+	// scan matched fs
+	while((min_match < PCM_LRCK_PERIOD) && !(priv->lrclk_period_map & PERIOD_TO_MAP(min_match))) 
+	{
+		min_match += PCM_LRCK_PERIOD_MAP_RESOLUTION;
+	}
+
+	// check RJ slot width
+	if ( ((priv->dai_fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_RIGHT_J) &&
+		  (min_match > priv->rj_slotwidth)) {
+		min_match = priv->rj_slotwidth; // round down lrclk period to slot width
+		DBGOUT("%s: sample resolution round down %dbit to %dbit(RJ slot width).", __func__, sample_resolution, priv->rj_slotwidth);
+	}
+
+	return min_match;
+}
+
+static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate, int sample_resolution)
 {
 	unsigned long freq;
-	int ret, i, div;
+	int ret, i, div, period;
 	static const u8 div_tb[] = {
 		1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 176, 192
 	};
 
-	DBGOUT("%s: rate = %lu.", __func__, rate);
+
+	/* calculate period */
+	period = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
+	DBGOUT("%s: rate = %lu. sample_resolution = %d period = %d", __func__, rate, sample_resolution, period);
 
 	/* compute the sys clock rate and divide values */
-	if ((rate % 11025) == 0)
-		freq	= 22579200;
-	else if ((rate % 8000) == 0)
-		freq	= 24576000;
-	else {
-		pr_info("Setting sysclk rate %lu is not supported.\n", rate );
-		return -EINVAL;
+	if (priv->mclk_max_freq) {
+		// search mclk less than mclk_max_freq
+		for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++) {
+			if ((period * rate * 2 * div_tb[i]) > priv->mclk_max_freq ) {
+				break;
+			}
+		}
+		// error check
+		if ( i == 0 ) {
+			pr_info("Setting sysclk rate %lu is not supported. (search mclk)\n", rate );
+			return -EINVAL;
+		}
+		// calcurate mclk & bclk div
+		freq = period * rate * 2 * div_tb[i-1];
+		div  = div_tb[i-1];
+
+	}else{
+		if ((rate % 11025) == 0)
+			freq	= 22579200;
+		else if ((rate % 8000) == 0)
+			freq	= 24576000;
+		else {
+			pr_info("Setting sysclk rate %lu is not supported.\n", rate );
+			return -EINVAL;
+		}
+
+		while( freq < (rate * 2 * period) ) {
+			freq	*= 2;
+		}
+
+		div = freq / 2 / period / rate;
 	}
 
-	while( freq < (rate * 2 * PCM_LRCK_PERIOD) ) {
-		freq	*= 2;
-	}
-
-	div = freq / 2 / PCM_LRCK_PERIOD / rate;
 	if (priv->type == SOC_A83T)
 		div /= 2;			/* bclk_div==0 => mclk/2 */
+
 	for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++)
 		if (div_tb[i] >= div)
 			break;
+
+	DBGOUT("%s: mclk freq = %lu. bclk div = %u. CLKD_BCLKDIV = %u", __func__, freq, div, i+1);
 
 	if (100000000 < freq) {
 		pr_info("Setting sysclk rate %lu is not supported.\n", rate );
 		return -EINVAL;
  	}
+
 	ret = clk_set_rate(priv->mod_clk, freq);
 	if (ret) {
 		pr_info("Setting sysclk rate failed %d\n", ret);
 		return ret;
+	}
+	{
+		unsigned long actual_rate = clk_get_rate(priv->mod_clk);
+		long error_rate  = 1000000 - ((long)freq * 1000000 / (long)actual_rate);
+		DBGOUT("%s: mclk actual freq = %lu. error = %ld ppm", __func__, actual_rate, error_rate);
 	}
 
 	/* set the mclk and bclk dividor register */
@@ -280,7 +354,7 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate)
 			     I2S_CLKD_A83T_MCLKOEN | I2S_CLKD_MCLKDIV(i));
 	} else {
 		regmap_write(priv->regmap, I2S_CLKD,
-			     I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
+			     I2S_CLKD_H3_MCLKOEN | I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
 	}
 
 	/* format */
@@ -291,7 +365,7 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate)
 	} else {
 		regmap_update_bits(priv->regmap, I2S_FAT0,
 				   I2S_FAT0_H3_LRCKR_PERIOD_MSK | I2S_FAT0_H3_LRCK_PERIOD_MSK,
-				   I2S_FAT0_H3_LRCK_PERIOD(PCM_LRCK_PERIOD - 1) | I2S_FAT0_H3_LRCKR_PERIOD(PCM_LRCKR_PERIOD - 1));
+				   I2S_FAT0_H3_LRCK_PERIOD(period - 1) | I2S_FAT0_H3_LRCKR_PERIOD(PCM_LRCKR_PERIOD - 1));
 
 		regmap_update_bits(priv->regmap, I2S_FAT0,
 				   I2S_FAT0_H3_SW_MSK | I2S_FAT0_H3_SR_MSK,
@@ -409,6 +483,7 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 	struct priv *priv = snd_soc_card_get_drvdata(card);
 	int nchan = params_channels(params);
 	int sample_resolution;
+	int slot_width;
 	int ret;
 
 	DBGOUT("%s: reached line %d, rate = %u, format = %d, nchan = %d.",
@@ -417,10 +492,6 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 
 	if (nchan < 1 || nchan > 8) return -EINVAL;
 	sun8i_i2s_tx_set_channels(priv, nchan);
-
-	ret = sun8i_i2s_set_clock(priv, params_rate(params));
-	if (ret)
-		return ret;
 
 	DBGOUT("%s: reached line %d.", __func__, __LINE__);
 
@@ -440,6 +511,12 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 	default:
 		return -EINVAL;
 	}
+
+	ret = sun8i_i2s_set_clock(priv, params_rate(params), sample_resolution);
+	if (ret)
+		return ret;
+	
+	slot_width = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
 
 	if (sample_resolution == 16) {
 		priv->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
@@ -466,17 +543,18 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 					   0);
 		}
 	} else {
-		if (sample_resolution == 16) {
+		if ( sample_resolution > slot_width ) { // RJ support
 			regmap_update_bits(priv->regmap, I2S_FAT0,
 					   I2S_FAT0_H3_SR_MSK | I2S_FAT0_H3_SW_MSK,
-					   I2S_FAT0_H3_SR_16 | I2S_FAT0_H3_SW_16);
+					   I2S_FAT0_H3_SR(sample_resolution) | I2S_FAT0_H3_SW(slot_width));
 			regmap_update_bits(priv->regmap, I2S_FCTL,
 					   I2S_FCTL_TXIM,
 					   I2S_FCTL_TXIM);
-		} else {
+			DBGOUT("%s: round slot width %d to %d\n", __func__, sample_resolution, slot_width);
+		}else{
 			regmap_update_bits(priv->regmap, I2S_FAT0,
 					   I2S_FAT0_H3_SR_MSK | I2S_FAT0_H3_SW_MSK,
-					   I2S_FAT0_H3_SR(sample_resolution) | I2S_FAT0_H3_SW_32);
+					   I2S_FAT0_H3_SR(sample_resolution) | I2S_FAT0_H3_SW(sample_resolution));
 			regmap_update_bits(priv->regmap, I2S_FCTL,
 					   I2S_FCTL_TXIM,
 					   I2S_FCTL_TXIM);
@@ -497,10 +575,23 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	struct priv *priv = snd_soc_card_get_drvdata(card);
 
 	DBGOUT("%s: fmt = 0x%x.", __func__, fmt);
+	priv->dai_fmt = fmt;
 
 	/* DAI Mode */
 	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_I2S:
+		if (priv->type == SOC_A83T) {
+			// TODO
+			return -EINVAL;
+		} else {
+			regmap_update_bits(priv->regmap, I2S_CTL,
+					   I2S_CTL_H3_MODE_MSK,
+					   I2S_CTL_H3_MODE_I2S);
+			regmap_update_bits(priv->regmap, I2S_TX0CHSEL_H3,
+					   I2S_TXn_H3_OFFSET_MSK,
+					   I2S_TXn_H3_OFFSET(1));
+		}
+		break;
 	case SND_SOC_DAIFMT_LEFT_J:
 		if (priv->type == SOC_A83T) {
 			// TODO
@@ -509,6 +600,9 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 			regmap_update_bits(priv->regmap, I2S_CTL,
 					   I2S_CTL_H3_MODE_MSK,
 					   I2S_CTL_H3_MODE_I2S);
+			regmap_update_bits(priv->regmap, I2S_TX0CHSEL_H3,
+					   I2S_TXn_H3_OFFSET_MSK,
+					   I2S_TXn_H3_OFFSET(0));
 		}
 		break;
 	case SND_SOC_DAIFMT_RIGHT_J:
@@ -519,6 +613,9 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 			regmap_update_bits(priv->regmap, I2S_CTL,
 					   I2S_CTL_H3_MODE_MSK,
 					   I2S_CTL_H3_MODE_RGT);
+			regmap_update_bits(priv->regmap, I2S_TX0CHSEL_H3,
+					   I2S_TXn_H3_OFFSET_MSK,
+					   I2S_TXn_H3_OFFSET(0));
 		}
 		break;
 	default:
@@ -641,9 +738,6 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 static int sun8i_i2s_set_bclk_ratio(struct snd_soc_dai *dai,
 				      unsigned int ratio)
 {
-	struct snd_soc_card *card = snd_soc_dai_get_drvdata(dai);
-	struct priv *priv = snd_soc_card_get_drvdata(card);
-
 	return 0;
 }
 
@@ -884,7 +978,7 @@ static struct snd_soc_ops snd_sun8i_dac_ops = {
         .hw_params = snd_sun8i_dac_hw_params,
 };
 
-static const struct snd_soc_dai_link snd_sun8i_dac_dai = {
+static struct snd_soc_dai_link snd_sun8i_dac_dai = {
 	.name		= "sun8i-i2s-dac",
 	.stream_name	= "sun8i-i2s-dac",
 	.dai_fmt	= SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
@@ -1086,6 +1180,101 @@ static int sun8i_i2s_runtime_suspend(struct device *dev)
 	return 0;
 }
 
+static void sun8i_i2s_parse_device_tree_options(struct device *dev, struct priv *priv)
+{
+	int ret, cnt;
+	struct snd_soc_dai_link *dai = &snd_sun8i_dac_dai;
+
+	/* get lrclk period map */
+	cnt = of_property_count_strings(dev->of_node, "lrclk_periods");
+	if ( cnt > 0 ) {
+		int i;
+		for ( i = 0 ; i < cnt ; i++) {
+			const char *output;
+			char *endp;
+			ret = of_property_read_string_index(dev->of_node, "lrclk_periods", i, &output);
+			if (ret) break;
+			priv->lrclk_period_map |= PERIOD_TO_MAP(simple_strtol(output, &endp, 10));
+			DBGOUT("%s: lrclk_periods[%d] = %s\n", __func__, i,output);
+		}
+	}else{
+		priv->lrclk_period_map = PERIOD_TO_MAP(32); // default 64fs only
+	}
+	DBGOUT("%s: priv->lrclk_period_map = %x\n", __func__, priv->lrclk_period_map);
+
+	/* get mclk max frequency */
+	{
+		u32 output;
+		priv->mclk_max_freq = 0;
+		ret = of_property_read_u32(dev->of_node, "mclk_max_freq", &output);
+		if (ret == 0){
+			priv->mclk_max_freq = output;
+			DBGOUT("%s: priv->mclk_max_freq = %d\n", __func__, priv->mclk_max_freq);
+		}
+	}
+
+	/* get dai_fmt master override*/
+	{
+		const char *output;
+		unsigned int dai_fmt = 0;
+		ret = of_property_read_string(dev->of_node, "daifmt_master_override", &output);
+		if (ret == 0){
+			if (!strncmp(output, "CBM_CFM", sizeof("CBM_CFM"))) {
+				dai_fmt = SND_SOC_DAIFMT_CBM_CFM;
+			}else
+			if (!strncmp(output, "CBS_CFS", sizeof("CBS_CFS"))) {
+				dai_fmt = SND_SOC_DAIFMT_CBS_CFS;
+			}else
+			if (!strncmp(output, "CBM_CFS", sizeof("CBM_CFS"))) {
+				dai_fmt = SND_SOC_DAIFMT_CBM_CFS;
+			}
+		}
+
+		if (dai_fmt) {
+			dai->dai_fmt = (dai->dai_fmt & (~SND_SOC_DAIFMT_MASTER_MASK)) | dai_fmt;
+			dev_info(dev, "daifmt_master_override = %s\n", output);
+		}
+	}
+
+	/* get dai_fmt audio override*/
+	{
+		const char *output;
+		unsigned int dai_fmt = 0;
+		ret = of_property_read_string(dev->of_node, "daifmt_audio_override", &output);
+		if (ret == 0){
+			if (!strncmp(output, "I2S", sizeof("I2S"))) {
+				dai_fmt = SND_SOC_DAIFMT_I2S;
+			}else
+			if (!strncmp(output, "RJ", sizeof("RJ"))) {
+				dai_fmt = SND_SOC_DAIFMT_RIGHT_J;
+			}else
+			if (!strncmp(output, "LJ", sizeof("LJ"))) {
+				dai_fmt = SND_SOC_DAIFMT_LEFT_J;
+			}
+		}
+
+		if (dai_fmt) {
+			dai->dai_fmt = (dai->dai_fmt & (~SND_SOC_DAIFMT_FORMAT_MASK)) | dai_fmt;
+			dev_info(dev, "daifmt_audio_override = %s\n", output);
+		}
+	}
+
+	/* get Right justified slot width */
+	{
+		u32 output;
+		priv->rj_slotwidth = 32;
+		ret = of_property_read_u32(dev->of_node, "rj_slotwidth", &output);
+		if (ret == 0){
+			priv->rj_slotwidth = output;
+			DBGOUT("%s: priv->rj_slotwidth = %d\n", __func__, priv->rj_slotwidth);
+		}
+	}
+
+	return;
+}
+
+
+
 /* --- module init --- */
 
 static int sun8i_i2s_dev_probe(struct platform_device *pdev)
@@ -1135,6 +1324,8 @@ static int sun8i_i2s_dev_probe(struct platform_device *pdev)
 		dev_err(dev, "Can't set rate of i2s clock\n");
 		return ret;
 	}
+
+	sun8i_i2s_parse_device_tree_options(dev, priv);
 
 	if (priv->type == SOC_A83T)
 		priv->regmap = devm_regmap_init_mmio(dev, mmio, &sun8i_i2s_regmap_a83t_config);

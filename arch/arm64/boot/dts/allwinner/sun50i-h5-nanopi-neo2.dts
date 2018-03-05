@@ -110,7 +110,7 @@
 		sw4 {
 			label = "sw4";
 			linux,code = <BTN_0>;
-			gpios = <&r_pio 0 3 GPIO_ACTIVE_LOW>;
+			gpios = <&pio 0 3 GPIO_ACTIVE_LOW>;
 		};
 	};
 
@@ -462,6 +462,5 @@
 };
 
 &i2s0 {
-	sound-dai = <&pcm5102a>;
 	status = "disabled";
 };

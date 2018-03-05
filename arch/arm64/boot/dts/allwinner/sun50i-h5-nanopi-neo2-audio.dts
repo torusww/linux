@@ -488,6 +488,7 @@
 
 &i2s0 {
 	status = "okay";
+	lrclk_periods = "16", "32";
 };
 
 
