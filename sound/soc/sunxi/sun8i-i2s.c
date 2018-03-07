@@ -256,7 +256,7 @@ static int sun8i_i2s_lrclk_period_minimum_match(struct priv *priv, int sample_re
 	while ( (max_period > PCM_LRCK_PERIOD_MAP_RESOLUTION) && !(priv->lrclk_period_map & PERIOD_TO_MAP(max_period)) )
 		max_period -= PCM_LRCK_PERIOD_MAP_RESOLUTION ;
 	if ( sample_resolution > max_period ) {
-		DBGOUT("%s: sample resolution round down %dbit to %dbit(max fs/2)", __func__, sample_resolution, max_period);
+		DBGOUT("%s: sample resolution round down %dbit to %dbit", __func__, sample_resolution, max_period);
 		return max_period;
 	}
 
@@ -264,13 +264,6 @@ static int sun8i_i2s_lrclk_period_minimum_match(struct priv *priv, int sample_re
 	while((min_match < PCM_LRCK_PERIOD) && !(priv->lrclk_period_map & PERIOD_TO_MAP(min_match))) 
 	{
 		min_match += PCM_LRCK_PERIOD_MAP_RESOLUTION;
-	}
-
-	// check RJ slot width
-	if ( ((priv->dai_fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_RIGHT_J) &&
-		  (min_match > priv->rj_slotwidth)) {
-		min_match = priv->rj_slotwidth; // round down lrclk period to slot width
-		DBGOUT("%s: sample resolution round down %dbit to %dbit(RJ slot width).", __func__, sample_resolution, priv->rj_slotwidth);
 	}
 
 	return min_match;
@@ -483,7 +476,6 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 	struct priv *priv = snd_soc_card_get_drvdata(card);
 	int nchan = params_channels(params);
 	int sample_resolution;
-	int slot_width;
 	int ret;
 
 	DBGOUT("%s: reached line %d, rate = %u, format = %d, nchan = %d.",
@@ -515,8 +507,6 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 	ret = sun8i_i2s_set_clock(priv, params_rate(params), sample_resolution);
 	if (ret)
 		return ret;
-	
-	slot_width = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
 
 	if (sample_resolution == 16) {
 		priv->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
@@ -543,14 +533,13 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 					   0);
 		}
 	} else {
-		if ( sample_resolution > slot_width ) { // RJ support
+		if ((priv->dai_fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_RIGHT_J) { // RJ support
 			regmap_update_bits(priv->regmap, I2S_FAT0,
 					   I2S_FAT0_H3_SR_MSK | I2S_FAT0_H3_SW_MSK,
-					   I2S_FAT0_H3_SR(sample_resolution) | I2S_FAT0_H3_SW(slot_width));
+					   I2S_FAT0_H3_SR(sample_resolution) | I2S_FAT0_H3_SW(priv->rj_slotwidth));
 			regmap_update_bits(priv->regmap, I2S_FCTL,
 					   I2S_FCTL_TXIM,
 					   I2S_FCTL_TXIM);
-			DBGOUT("%s: round slot width %d to %d\n", __func__, sample_resolution, slot_width);
 		}else{
 			regmap_update_bits(priv->regmap, I2S_FAT0,
 					   I2S_FAT0_H3_SR_MSK | I2S_FAT0_H3_SW_MSK,
