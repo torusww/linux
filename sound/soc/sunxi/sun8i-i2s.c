@@ -1248,6 +1248,32 @@ static void sun8i_i2s_parse_device_tree_options(struct device *dev, struct priv 
 		}
 	}
 
+	/* get dai_fmt polarity override*/
+	{
+		const char *output;
+		unsigned int dai_fmt = 0;
+		ret = of_property_read_string(dev->of_node, "daifmt_polarity_override", &output);
+		if (ret == 0){
+			if (!strncmp(output, "IB_IF", sizeof("IB_IF"))) {
+				dai_fmt = SND_SOC_DAIFMT_IB_IF;
+			}else
+			if (!strncmp(output, "IB_NF", sizeof("IB_NF"))) {
+				dai_fmt = SND_SOC_DAIFMT_IB_NF;
+			}else
+			if (!strncmp(output, "NB_IF", sizeof("NB_IF"))) {
+				dai_fmt = SND_SOC_DAIFMT_NB_IF;
+			}else
+			if (!strncmp(output, "NB_NF", sizeof("NB_NF"))) {
+				dai_fmt = SND_SOC_DAIFMT_NB_NF;
+			}
+		}
+
+		if (dai_fmt) {
+			dai->dai_fmt = (dai->dai_fmt & (~SND_SOC_DAIFMT_INV_MASK)) | dai_fmt;
+			dev_info(dev, "daifmt_polarity_override = %s\n", output);
+		}
+	}
+
 	/* get Right justified slot width */
 	{
 		u32 output;

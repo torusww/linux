@@ -90,5 +90,6 @@
 	sound-dai = <&pcm5102a>;
 	status = "okay";
 	daifmt_audio_override = "RJ";
+	daifmt_polarity_override = "NB_IF";
 	rj_slotwidth = <16>;
 };
