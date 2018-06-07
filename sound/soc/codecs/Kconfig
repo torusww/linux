@@ -41,6 +41,7 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_AK4641 if I2C
 	select SND_SOC_AK4642 if I2C
 	select SND_SOC_AK4671 if I2C
+	select SND_SOC_AK449X if I2C
 	select SND_SOC_AK5386
 	select SND_SOC_ALC5623 if I2C
 	select SND_SOC_ALC5632 if I2C
@@ -359,6 +360,10 @@ config SND_SOC_ADS117X
 config SND_SOC_AK4104
 	tristate "AKM AK4104 CODEC"
 	depends on SPI_MASTER
+
+config SND_SOC_AK449X
+	tristate "AKM AK4490/93/95/97 CODEC"
+	depends on I2C
 
 config SND_SOC_AK4535
 	tristate
