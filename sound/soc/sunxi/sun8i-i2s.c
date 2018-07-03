@@ -24,11 +24,14 @@
 #include <linux/of_device.h>
 #include <linux/of_graph.h>
 
-#if (0)
+#if (1)
 #define DBGOUT(msg...)		do { printk(KERN_ERR msg); } while (0)
 #else
 #define DBGOUT(msg...)		do {} while (0)
 #endif
+
+
+#define MAX_CODECS_NUM (4)
 
 /* --- hardware --- */
 
@@ -937,20 +940,37 @@ static struct device_node *sun8i_get_codec_by_remote_port(struct device *dev)
 	return remote;
 }
 
-static struct device_node *sun8i_get_codec(struct device *dev)
+static int sun8i_get_codecs(struct device *dev, struct snd_soc_dai_link_component *codecs, int node_max)
 {
 	struct of_phandle_args args;
-	int ret;
+	int ret, cnt, i;
 
-	ret = of_parse_phandle_with_args(dev->of_node, "sound-dai",
-					 "#sound-dai-cells", 0, &args);
-	if (ret) {
+	cnt = of_count_phandle_with_args(dev->of_node, "sound-dai", "#sound-dai-cells");
+	DBGOUT("%s: sound-dai = %d", __func__, cnt);
+
+	if ( cnt < 1 ){ 
 		DBGOUT("%s: Can't find codec by \"sound-dai\", try \"remote-port\" ...\n", __func__);
-		return sun8i_get_codec_by_remote_port(dev);
+		codecs[0].of_node = sun8i_get_codec_by_remote_port(dev);
+		if (codecs[0].of_node) {
+			return 1;
+		}else{
+			return 0;
+		}
 	}
 
-	return args.np;
+	for ( i = 0; i < cnt && i < node_max ; i++ ) {
+		ret = of_parse_phandle_with_args(dev->of_node, "sound-dai",
+					 "#sound-dai-cells", i, &args);
+		if (ret) {
+			DBGOUT("%s: Can't find codec by \"sound-dai\"\n", __func__);
+			return 0;
+		}
+		codecs[i].of_node = args.np;
+	}
+
+	return i;
 }
+
 
 static int snd_sun8i_dac_init(struct snd_soc_pcm_runtime *rtd)
 {
@@ -984,7 +1004,8 @@ static int sun8i_card_create(struct device *dev, struct priv *priv)
 {
 	struct snd_soc_card *card;
 	struct snd_soc_dai_link *dai_link;
-	struct snd_soc_dai_link_component *codec;
+	struct snd_soc_dai_link_component *codecs;
+	int num_codecs, i;
 
 	card = devm_kzalloc(dev, sizeof(*card), GFP_KERNEL);
 	if (!card)
@@ -992,29 +1013,29 @@ static int sun8i_card_create(struct device *dev, struct priv *priv)
 	dai_link = devm_kzalloc(dev, sizeof(*dai_link), GFP_KERNEL);
 	if (!dai_link)
 		return -ENOMEM;
-	codec = devm_kzalloc(dev, sizeof(*codec), GFP_KERNEL);
-	if (!codec)
+	codecs = devm_kzalloc(dev, sizeof(struct snd_soc_dai_link_component)*MAX_CODECS_NUM, GFP_KERNEL);
+	if (!codecs)
 		return -ENOMEM;
 
-	codec->of_node = sun8i_get_codec(dev);
-	if (!codec->of_node) {
+	num_codecs = sun8i_get_codecs(dev, codecs, MAX_CODECS_NUM);
+	if (!num_codecs) {
 		dev_err(dev, "no port node\n");
 		card->dev = dev;
 		dev_set_drvdata(dev, card);
 		snd_soc_card_set_drvdata(card, priv);
 		// free
 		devm_kfree(dev, dai_link);
-		devm_kfree(dev, codec);
+		devm_kfree(dev, codecs);
 		return 0;
 	}
-	DBGOUT("%s: codec_name=\"%s\"\n", __func__, codec->of_node->name);
-
-	if(snd_soc_of_get_dai_name(dev->of_node, &codec->dai_name) < 0)
-	{
-		dev_err(dev, "%s: failed to find dai name, use codec's name as dai name.\n", __func__);
-		codec->dai_name = codec->of_node->name;
+	// set dai name
+	for (i=0; i < num_codecs; i++) {
+		if (snd_soc_of_get_dai_name(dev->of_node, &codecs[i].dai_name) < 0 ) {
+			dev_err(dev, "%s: failed to find dai name, use codec's name as dai name.\n", __func__);
+			codecs[i].dai_name = codecs[i].of_node->name;
+		}
 	}
-	DBGOUT("%s: dai_name=\"%s\"\n", __func__, codec->dai_name);
+	DBGOUT("%s: dai_name=\"%s\"\n", __func__, codecs[0].dai_name);
 
 	card->name = snd_sun8i_dac.name;
 	card->dai_link = dai_link;
@@ -1028,8 +1049,8 @@ static int sun8i_card_create(struct device *dev, struct priv *priv)
 	dai_link->cpu_of_node = dev->of_node;
 	dai_link->platform_of_node = dev->of_node;
 
-	dai_link->codecs = codec;
-	dai_link->num_codecs = 1;
+	dai_link->codecs = codecs;
+	dai_link->num_codecs = num_codecs;
 
 	card->dev = dev;
 	dev_set_drvdata(dev, card);
