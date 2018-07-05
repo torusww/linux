@@ -45,6 +45,7 @@ struct ak449x_priv {
 	int fmt;
 	int slots;
 	int slot_width;
+	int mute;
 
 	int chip;
 	int chmode; // bit1: mono, bit0:sellr
@@ -504,9 +505,16 @@ static int ak449x_set_dai_mute(struct snd_soc_dai *dai, int mute)
 	int nfs, ndt, ret, reg;
 	int ats;
 
-	nfs = ak449x->fs;
+	ak449x_debug("%s mute = %d\n", __FUNCTION__, mute);
+
+	/* state check */
+	if ( ak449x->mute == mute ) {
+		return 0;
+	}
+	ak449x->mute = mute;
 
 	/* calculate att transition time */
+	nfs = ak449x->fs;
 	if(ak449x->chip == AK449X_CHIP_AK4493 || ak449x->chip == AK449X_CHIP_AK4497) {
 	       	// for AK4493/4497 variable rate
 		reg = snd_soc_read(codec, AK449X_0B_CONTROL7);
@@ -674,10 +682,12 @@ static void ak449x_init(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 
-	ak449x_debug("%s\n", __FUNCTION__);
+	dev_info(codec->dev, "%s\n", __FUNCTION__);
 	/* External Mute ON */
 	if (ak449x->mute_gpiod)
 		gpiod_set_value_cansleep(ak449x->mute_gpiod, 1);
+
+	ak449x->mute = -1; /* reset mute state */
 
 	ak449x_power_on(ak449x);
 
@@ -691,7 +701,7 @@ static int ak449x_probe(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 
-	ak449x_debug("%s\n", __FUNCTION__);
+	dev_info(codec->dev, "%s\n", __FUNCTION__);
 	ak449x_init(codec);
 
 	ak449x->fs = 48000;
