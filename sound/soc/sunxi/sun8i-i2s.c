@@ -24,7 +24,7 @@
 #include <linux/of_device.h>
 #include <linux/of_graph.h>
 
-#if (1)
+#if (0)
 #define DBGOUT(msg...)		do { printk(KERN_ERR msg); } while (0)
 #else
 #define DBGOUT(msg...)		do {} while (0)
@@ -170,6 +170,8 @@ struct priv {
 	int nchan;
 
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
+
+	int clk_always_on;
 
 	unsigned int lrclk_period_map;
 	unsigned int mclk_mode;
@@ -453,6 +455,14 @@ static int sun8i_i2s_startup(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
+	if (priv->clk_always_on == 1) {
+		DBGOUT("%s: clk always on.", __func__);
+		return 0;
+	}else
+	if (priv->clk_always_on == 0){
+		priv->clk_always_on = 1; // set clk start state.
+	}
+
 	return clk_prepare_enable(priv->mod_clk);
 }
 
@@ -464,6 +474,10 @@ static void sun8i_i2s_shutdown(struct snd_pcm_substream *substream,
 
 	DBGOUT("%s: reached.", __func__);
 
+	if (priv->clk_always_on == 1) {
+		DBGOUT("%s: clk always on.", __func__);
+		return;
+	}
 	clk_disable_unprepare(priv->mod_clk);
 
 	regmap_update_bits(priv->regmap, I2S_CTL,
@@ -765,10 +779,14 @@ static void sun8i_i2s_stop_playback(struct priv *priv)
 			   I2S_FCTL_FTX,
 			   I2S_FCTL_FTX);
 
-	/* Disable TX Block */
-	regmap_update_bits(priv->regmap, I2S_CTL,
-			   I2S_CTL_TXEN,
-			   0);
+	if (priv->clk_always_on != 1) {
+		/* Disable TX Block */
+		regmap_update_bits(priv->regmap, I2S_CTL,
+				   I2S_CTL_TXEN,
+				   0);
+	}else{
+		DBGOUT("%s: clk always on.", __func__);
+	}
 
 	/* Disable TX DRQ */
 	regmap_update_bits(priv->regmap, I2S_INT,
@@ -1303,6 +1321,17 @@ static void sun8i_i2s_parse_device_tree_options(struct device *dev, struct priv 
 		if (ret == 0){
 			priv->rj_slotwidth = output;
 			DBGOUT("%s: priv->rj_slotwidth = %d\n", __func__, priv->rj_slotwidth);
+		}
+	}
+
+	/* get clk always on */
+	{
+		u32 output;
+		priv->clk_always_on = -1; // default off.
+		ret = of_property_read_u32(dev->of_node, "clk_always_on", &output);
+		if (ret == 0 && output == 1){
+			priv->clk_always_on = 0; // clk alwasys on enable, set clk stop state.
+			DBGOUT("%s: priv->clk_always_on = enabled\n", __func__);
 		}
 	}
 
