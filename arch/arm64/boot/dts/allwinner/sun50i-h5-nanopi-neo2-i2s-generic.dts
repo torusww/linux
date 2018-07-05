@@ -86,5 +86,6 @@
 &i2s0 {
 	sound-dai = <&pcm5102a>;
 	status = "okay";
+	clk_always_on = <1>;
 };
 

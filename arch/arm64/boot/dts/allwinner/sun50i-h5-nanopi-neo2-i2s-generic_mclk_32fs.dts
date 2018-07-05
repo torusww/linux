@@ -90,6 +90,7 @@
 	sound-dai = <&pcm5102a>;
 	status = "okay";
 	lrclk_periods = "16";
+	clk_always_on = <1>;
 };
 
 

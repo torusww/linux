@@ -92,4 +92,5 @@
 	daifmt_audio_override = "RJ";
 	daifmt_polarity_override = "NB_IF";
 	rj_slotwidth = <24>;
+	clk_always_on = <1>;
 };

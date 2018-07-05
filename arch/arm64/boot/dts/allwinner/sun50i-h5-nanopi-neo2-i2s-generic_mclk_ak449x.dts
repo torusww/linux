@@ -67,14 +67,14 @@
 &i2c0 {
 	status = "okay";
 
-        ak449x: ak449x-codec@13 {
+        ak449x: ak449x-codec@10 {
                 #sound-dai-cells = <0>;
                 compatible = "asahi-kasei,ak449x";
-                reg = <0x13>; /* I2C addr */
+                reg = <0x10>; /* I2C addr */
                 status = "okay";
 
-                chip = "AK4493"; /* AK4490/AK4495/AK4497/AK4493 */
-/*                chmode = "MONO_RCH"; */ /* STEREO/STEREO_INVERT/MONO_LCH/MONO_RCH */
+                chip = "AK4495"; /* AK4490/AK4495/AK4497/AK4493 */
+                chmode = "STEREO"; /* STEREO/STEREO_INVERT/MONO_LCH/MONO_RCH */
 /*                phase = "LNRN"; */ /* LNRN LNRI LIRN LIRI - N=non-invert I=invert*/
                 reset-gpios = <&pio 6 7 GPIO_ACTIVE_LOW>; /* PG7 */ /* pdn pin */
 /*                mute-gpios = <&pio 6 6 GPIO_ACTIVE_HIGH>; */ /* PG6 */ /* external mute */
@@ -105,6 +105,7 @@
 &i2s0 {
 	sound-dai = <&ak449x>; /* dai link target */
 	status = "okay";
+	clk_always_on = <1>;
 };
 
 

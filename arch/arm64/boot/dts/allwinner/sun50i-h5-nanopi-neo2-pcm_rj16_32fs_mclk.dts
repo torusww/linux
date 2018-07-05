@@ -93,4 +93,5 @@
 	daifmt_polarity_override = "NB_IF";
 	rj_slotwidth = <16>;
 	lrclk_periods = "16";
+	clk_always_on = <1>;
 };

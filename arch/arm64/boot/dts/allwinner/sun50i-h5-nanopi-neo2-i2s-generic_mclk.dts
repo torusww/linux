@@ -80,6 +80,10 @@
 
 &spi0 {
     cs-gpios = <&pio 2 3 GPIO_ACTIVE_HIGH>;
+    pitft: pitft@0{
+	/* PG11 disable */
+        status = "disabled";
+	};
 
     pitft_ts: pitft-ts@1 {
         status = "disabled";
@@ -89,6 +93,7 @@
 &i2s0 {
 	sound-dai = <&pcm5102a>;
 	status = "okay";
+	clk_always_on = <1>;
 };
 
 
