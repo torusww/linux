@@ -10,6 +10,8 @@
  *  option) any later version.
  */
 
+//#define DEBUG
+
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
@@ -26,13 +28,8 @@
 
 #include "ak449x.h"
 
-#define AK449X_DEBUG
+#define AK449X_SUPPORT_MULTICODEC_MIXER
 
-#ifdef AK449X_DEBUG
-#define ak449x_debug(...) printk(__VA_ARGS__)
-#else
-#define	ak449x_debug(...)
-#endif
 
 /* AK449X Codec Private Data */
 struct ak449x_priv {
@@ -50,7 +47,24 @@ struct ak449x_priv {
 	int chip;
 	int chmode; // bit1: mono, bit0:sellr
 	int phase;
+
+	struct snd_soc_codec_driver *codec_drv;
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+	int    mcvol_lch;
+	int    mcvol_rch;
+	unsigned short i2c_addr;
+	struct ak449x_priv *next;
+#endif
 };
+
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+#include <linux/mutex.h>
+static struct ak449x_priv *ak449x_master = NULL;
+DEFINE_MUTEX( ak449x_lock );
+#endif
+static int    ak449x_reset = -1;
+
+
 
 /* ak449x chip variant */
 enum {
@@ -214,6 +228,20 @@ static const char * const ak449x_gc_select_texts[] = {
 	"PCM3.75Vpp/DSD2.5Vpp",
 };
 
+/*
+ * ATS1-0 bits: ATT Transition Time
+ * 0, 0 : 4080/fs
+ * 0, 1 : 2040/fs
+ * 1, 0 : 510/fs
+ * 1, 1 : 255/fs
+ */
+
+static const char * const ak449x_ats_select_texts[] = {
+	"4080/fs",
+	"2040/fs",
+	"510/fs",
+	"255/fs",
+};
 
 
 // generic control
@@ -263,7 +291,10 @@ static const struct soc_enum ak449x_gc_enum =
 			ARRAY_SIZE(ak449x_gc_select_texts),
 			ak449x_gc_select_texts);
 
-
+static const struct soc_enum ak449x_ats_enum =
+	SOC_ENUM_SINGLE(AK449X_0B_CONTROL7, 6,
+			ARRAY_SIZE(ak449x_ats_select_texts),
+			ak449x_ats_select_texts);
 
 static int get_digfil(struct snd_kcontrol *kcontrol,
 		      struct snd_ctl_elem_value *ucontrol)
@@ -307,37 +338,37 @@ static int set_digfil(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new ak4490_snd_controls[] = {
-	SOC_DOUBLE_R_TLV("Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
-	SOC_ENUM("De-emphasis Response", ak449x_dem_enum),
-	SOC_ENUM_EXT("Digital Filter Setting", ak449x_digfil_enum, get_digfil, set_digfil),
-//	SOC_ENUM("AK449X Inverting Enable of DZFB", ak449x_dzfb_enum),
-	SOC_ENUM("Sound Mode", ak4490_sm_enum),
+
+static struct snd_kcontrol_new ak4490_snd_controls[] = {
+	SOC_DOUBLE_R_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
+	SOC_ENUM("De-emphasis", ak449x_dem_enum),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil),
+	SOC_ENUM("SoundMode", ak4490_sm_enum),
 };
-static const struct snd_kcontrol_new ak4495_snd_controls[] = {
-	SOC_DOUBLE_R_TLV("Digital Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
-	SOC_ENUM("De-emphasis Response", ak449x_dem_enum),
-	SOC_ENUM_EXT("Digital Filter Setting", ak449x_digfil_enum, get_digfil, set_digfil),
-//	SOC_ENUM("AK449X Inverting Enable of DZFB", ak449x_dzfb_enum),
-	SOC_ENUM("Sound Mode", ak4495_sm_enum),
+static struct snd_kcontrol_new ak4495_snd_controls[] = {
+	SOC_DOUBLE_R_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
+	SOC_ENUM("De-emphasis", ak449x_dem_enum),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil),
+	SOC_ENUM("SoundMode", ak4495_sm_enum),
 };
-static const struct snd_kcontrol_new ak4497_snd_controls[] = {
-	SOC_DOUBLE_R_TLV("Digital Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
-	SOC_ENUM("De-emphasis Response", ak449x_dem_enum),
-	SOC_ENUM_EXT("Digital Filter Setting", ak449x_digfil_enum, get_digfil, set_digfil),
-//	SOC_ENUM("AK449X Inverting Enable of DZFB", ak449x_dzfb_enum),
-	SOC_ENUM("Sound Mode", ak4497_sm_enum),
-	SOC_ENUM("Gain Control", ak449x_gc_enum),
-	SOC_ENUM("AK449X HLOAD", ak4497_hload_enum),
+static struct snd_kcontrol_new ak4497_snd_controls[] = {
+	SOC_DOUBLE_R_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
+	SOC_ENUM("De-emphasis", ak449x_dem_enum),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil),
+	SOC_ENUM("SoundMode", ak4497_sm_enum),
+	SOC_ENUM("GainControl", ak449x_gc_enum),
+	SOC_ENUM("HLOAD", ak4497_hload_enum),
+	SOC_ENUM("ATS", ak449x_ats_enum),
 };
-static const struct snd_kcontrol_new ak4493_snd_controls[] = {
-	SOC_DOUBLE_R_TLV("Digital Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
-	SOC_ENUM("De-emphasis Response", ak449x_dem_enum),
-	SOC_ENUM_EXT("Digital Filter Setting", ak449x_digfil_enum, get_digfil, set_digfil),
-//	SOC_ENUM("AK449X Inverting Enable of DZFB", ak449x_dzfb_enum),
-	SOC_ENUM("Sound Mode", ak4493_sm_enum),
-	SOC_ENUM("Gain Control", ak449x_gc_enum),
+static struct snd_kcontrol_new ak4493_snd_controls[] = {
+	SOC_DOUBLE_R_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, dac_tlv),
+	SOC_ENUM("De-emphasis", ak449x_dem_enum),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil),
+	SOC_ENUM("SoundMode", ak4493_sm_enum),
+	SOC_ENUM("GainControl", ak449x_gc_enum),
+	SOC_ENUM("ATS", ak449x_ats_enum),
 };
+
 
 
 /* ak449x dapm widgets */
@@ -356,6 +387,232 @@ static const struct snd_soc_dapm_route ak449x_intercon[] = {
 	{ "OUTL", NULL, "DACL" },
 	{ "OUTR", NULL, "DACR" },
 };
+
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+
+#define MULTICODEC_TEXTS(a) {#a, "AK0 " #a, "AK1 " #a, "AK2 " #a, "AK3 " #a}
+static const char * const ak449x_mc_texts_table[][32] = {
+	MULTICODEC_TEXTS(Play Volume),
+	MULTICODEC_TEXTS(De-emphasis),
+	MULTICODEC_TEXTS(DigiFilt),
+	MULTICODEC_TEXTS(SoundMode),
+	MULTICODEC_TEXTS(GainControl),
+	MULTICODEC_TEXTS(HLOAD),
+	MULTICODEC_TEXTS(ATS),
+};
+
+
+static int get_volsw_mc(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+        struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
+        struct soc_mixer_control *mc =
+                (struct soc_mixer_control *)kcontrol->private_value;
+
+        ucontrol->value.integer.value[0] = ak449x->mcvol_lch;
+
+        if (snd_soc_volsw_is_stereo(mc)) {
+                ucontrol->value.integer.value[1] = ak449x->mcvol_rch;
+        }
+
+        dev_dbg(ak449x->dev, "%s get %d/%d", __FUNCTION__, ak449x->mcvol_lch, ak449x->mcvol_rch);
+
+        return 0;
+}
+
+
+static int put_volsw_mc(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
+
+	struct soc_mixer_control *mc =
+                (struct soc_mixer_control *)kcontrol->private_value;
+	unsigned int reg = mc->reg;
+	unsigned int reg2 = mc->rreg;
+        unsigned int shift = mc->shift;
+        unsigned int rshift = mc->rshift;
+        int max = mc->max;
+        int min = mc->min;
+        unsigned int sign_bit = mc->sign_bit;
+        unsigned int mask = (1 << fls(max)) - 1;
+        unsigned int invert = mc->invert;
+        int err;
+        bool type_2r = false;
+        unsigned int val2 = 0;
+        unsigned int val, val_mask;
+
+        if (sign_bit)
+                mask = BIT(sign_bit + 1) - 1;
+
+        val = ((ucontrol->value.integer.value[0] + min) & mask);
+        if (invert)
+                val = max - val;
+        val_mask = mask << shift;
+        val = val << shift;
+        if (snd_soc_volsw_is_stereo(mc)) {
+                val2 = ((ucontrol->value.integer.value[1] + min) & mask);
+                if (invert)
+                        val2 = max - val2;
+                if (reg == reg2) {
+                        val_mask |= mask << rshift;
+                        val |= val2 << rshift;
+                } else {
+                        val2 = val2 << shift;
+                        type_2r = true;
+                }
+        }
+	ak449x->mcvol_lch = val;
+	if (type_2r) ak449x->mcvol_rch = val2;
+
+	/* channel select */
+	if (ak449x->chmode == AK449X_CHMODE_MONO_LCH) {
+		val2 = val;  // LCH Volume
+	}else{
+		val  = val2; // RCH Volume
+	}
+        err = snd_soc_update_bits(codec, reg, val_mask, val);
+	if (err < 0) {
+		dev_err(ak449x->dev, "%s error %d", __FUNCTION__, err);
+		return err;
+	}
+
+	if (type_2r) {
+		err = snd_soc_update_bits(codec, reg2, val_mask, val2);
+		if (err < 0) {
+			dev_err(ak449x->dev, "%s error %d", __FUNCTION__, err);
+		}
+	}
+
+	dev_dbg(ak449x->dev, "%s reg %x set %d / reg %x set %d", __FUNCTION__, reg, val, reg2, val2);
+
+	// chain mixer
+	if (ak449x->next) {
+		snd_soc_codec_set_drvdata(codec, ak449x->next);
+		codec->component.regmap = ak449x->next->regmap;
+		err = put_volsw_mc (kcontrol, ucontrol);
+		snd_soc_codec_set_drvdata(codec, ak449x);
+		codec->component.regmap = ak449x->regmap;
+	}
+
+	return err;
+}
+
+
+static int set_digfil_mc(struct snd_kcontrol *kcontrol,
+		      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
+	int num;
+	int err;
+
+	num = ucontrol->value.enumerated.item[0];
+	if (num > 4)
+		return -EINVAL;
+
+	ak449x->digfil = num;
+
+	/* write SD bit */
+	err = snd_soc_update_bits(codec, AK449X_01_CONTROL2,
+			    AK449X_SD_MASK,
+			    ((ak449x->digfil & 0x02) << 4));
+	if (err < 0) dev_err(ak449x->dev, "%s error %d", __FUNCTION__, err);
+
+	/* write SLOW bit */
+	err = snd_soc_update_bits(codec, AK449X_02_CONTROL3,
+			    AK449X_SLOW_MASK,
+			    (ak449x->digfil & 0x01));
+	if (err < 0) dev_err(ak449x->dev, "%s error %d", __FUNCTION__, err);
+
+	/* write SSLOW bit */
+	err = snd_soc_update_bits(codec, AK449X_05_CONTROL4,
+			    AK449X_SSLOW_MASK,
+			    ((ak449x->digfil & 0x04) >> 2));
+	if (err < 0) dev_err(ak449x->dev, "%s error %d", __FUNCTION__, err);
+
+	dev_dbg(ak449x->dev, "%s set %d", __FUNCTION__, num);
+
+	// chain mixer
+	if (ak449x->next) {
+		int ret;
+		snd_soc_codec_set_drvdata(codec, ak449x->next);
+		codec->component.regmap = ak449x->next->regmap;
+		ret = set_digfil_mc (kcontrol, ucontrol);
+		snd_soc_codec_set_drvdata(codec, ak449x);
+		codec->component.regmap = ak449x->regmap;
+	}
+	return 0;
+}
+
+static int put_enum_double_mc(struct snd_kcontrol *kcontrol,
+        struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
+        struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
+        unsigned int *item = ucontrol->value.enumerated.item;
+        unsigned int val;
+        unsigned int mask;
+	int err;
+
+        if (item[0] >= e->items)
+                return -EINVAL;
+        val = snd_soc_enum_item_to_val(e, item[0]) << e->shift_l;
+        mask = e->mask << e->shift_l;
+        if (e->shift_l != e->shift_r) {
+                if (item[1] >= e->items)
+                        return -EINVAL;
+                val |= snd_soc_enum_item_to_val(e, item[1]) << e->shift_r;
+                mask |= e->mask << e->shift_r;
+        }
+
+	err = snd_soc_update_bits(codec, e->reg, mask, val);
+
+        // chain mixer
+        if (ak449x->next) {
+                int ret;
+                snd_soc_codec_set_drvdata(codec, ak449x->next);
+                codec->component.regmap = ak449x->next->regmap;
+                ret = put_enum_double_mc(kcontrol, ucontrol);
+                snd_soc_codec_set_drvdata(codec, ak449x);
+                codec->component.regmap = ak449x->regmap;
+        }
+
+        return err;
+}
+
+
+static struct snd_kcontrol_new ak4490_snd_controls_mc[] = {
+	SOC_DOUBLE_R_EXT_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, get_volsw_mc, put_volsw_mc, dac_tlv),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil_mc),
+	SOC_ENUM_EXT("SoundMode", ak4490_sm_enum, snd_soc_get_enum_double, put_enum_double_mc),
+};
+static struct snd_kcontrol_new ak4495_snd_controls_mc[] = {
+	SOC_DOUBLE_R_EXT_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, get_volsw_mc, put_volsw_mc, dac_tlv),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil_mc),
+	SOC_ENUM_EXT("SoundMode", ak4495_sm_enum, snd_soc_get_enum_double, put_enum_double_mc),
+};
+static struct snd_kcontrol_new ak4497_snd_controls_mc[] = {
+	SOC_DOUBLE_R_EXT_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, get_volsw_mc, put_volsw_mc, dac_tlv),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil_mc),
+	SOC_ENUM_EXT("SoundMode", ak4497_sm_enum, snd_soc_get_enum_double, put_enum_double_mc),
+	SOC_ENUM_EXT("GainControl", ak449x_gc_enum, snd_soc_get_enum_double, put_enum_double_mc),
+	SOC_ENUM_EXT("HLOAD", ak4497_hload_enum, snd_soc_get_enum_double, put_enum_double_mc),
+	SOC_ENUM_EXT("ATS", ak449x_ats_enum, snd_soc_get_enum_double, put_enum_double_mc),
+};
+static struct snd_kcontrol_new ak4493_snd_controls_mc[] = {
+	SOC_DOUBLE_R_EXT_TLV("Play Volume", AK449X_03_LCHATT, AK449X_04_RCHATT, 0, 0xFF, 0, get_volsw_mc, put_volsw_mc, dac_tlv),
+	SOC_ENUM_EXT("DigiFilt", ak449x_digfil_enum, get_digfil, set_digfil_mc),
+	SOC_ENUM_EXT("SoundMode", ak4493_sm_enum, snd_soc_get_enum_double, put_enum_double_mc),
+	SOC_ENUM_EXT("GainControl", ak449x_gc_enum, snd_soc_get_enum_double, put_enum_double_mc),
+	SOC_ENUM_EXT("ATS", ak449x_ats_enum, snd_soc_get_enum_double, put_enum_double_mc),
+};
+#endif
+
+
 
 static int ak449x_rstn_control(struct snd_soc_codec *codec, int bit)
 {
@@ -397,18 +654,18 @@ static int ak449x_phase_set(struct snd_soc_codec *codec)
 static int ak449x_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params,
 			    struct snd_soc_dai *dai)
-{
+{                      
 	struct snd_soc_codec *codec = dai->codec;
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 	int pcm_width = max(params_physical_width(params), ak449x->slot_width);
 	int nfs1;
 	u8 format;
 
-	ak449x_debug("%s\n", __FUNCTION__);
 
 	nfs1 = params_rate(params);
 	ak449x->fs = nfs1;
 
+	dev_dbg(codec->dev, "%s pcm_width = %d, fmt = %x\n", __FUNCTION__, pcm_width, ak449x->fmt);
 	/* Master Clock Frequency Auto Setting Mode Enable */
 	snd_soc_update_bits(codec, AK449X_00_CONTROL1, 0x80, 0x80);
 
@@ -454,7 +711,7 @@ static int ak449x_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	snd_soc_update_bits(codec, AK449X_00_CONTROL1, AK449X_DIF_MASK, format);
-	ak449x_debug("%s set dif format = %x\n", __FUNCTION__, format);
+	dev_dbg(codec->dev, "%s set dif format = %x\n", __FUNCTION__, format);
 
 	ak449x_rstn_control(codec, 0);
 	ak449x_rstn_control(codec, 1);
@@ -467,7 +724,7 @@ static int ak449x_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	struct snd_soc_codec *codec = dai->codec;
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 
-	ak449x_debug("%s\n", __FUNCTION__);
+	dev_dbg(codec->dev, "%s fmt = %d\n", __FUNCTION__, fmt);
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBS_CFS: /* Slave Mode */
@@ -505,7 +762,7 @@ static int ak449x_set_dai_mute(struct snd_soc_dai *dai, int mute)
 	int nfs, ndt, ret, reg;
 	int ats;
 
-	ak449x_debug("%s mute = %d\n", __FUNCTION__, mute);
+	dev_dbg(codec->dev, "%s mute = %d\n", __FUNCTION__, mute);
 
 	/* state check */
 	if ( ak449x->mute == mute ) {
@@ -543,7 +800,7 @@ static int ak449x_set_dai_mute(struct snd_soc_dai *dai, int mute)
 static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_priv *ak449x)
 {
 	int ret;
-	ak449x_debug("%s\n", __FUNCTION__);
+	dev_dbg(dev, "%s\n", __FUNCTION__);
 
 	/* get chip name */
 	{
@@ -563,7 +820,7 @@ static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_p
 				ak449x->chip = AK449X_CHIP_AK4493;
 			}
 		}
-		ak449x_debug("%s: ak449x->chip = %d\n", __FUNCTION__, ak449x->chip);
+		dev_notice(dev, "%s: ak449x->chip = %d\n", __FUNCTION__, ak449x->chip);
 	}
 	
 
@@ -585,7 +842,7 @@ static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_p
 				ak449x->chmode = AK449X_CHMODE_MONO_RCH;
 			}
 		}
-		ak449x_debug("%s: ak449x->chmode = %d\n", __FUNCTION__, ak449x->chmode);
+		dev_notice(dev, "%s: ak449x->chmode = %d\n", __FUNCTION__, ak449x->chmode);
 	}
 
 	/* channel phase */
@@ -606,7 +863,7 @@ static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_p
 				ak449x->phase = AK449X_PHASE_LI_RI;
 			}
 		}
-		ak449x_debug("%s: ak449x->phase = %d\n", __FUNCTION__, ak449x->phase);
+		dev_notice(dev, "%s: ak449x->phase = %d\n", __FUNCTION__, ak449x->phase);
 	}
 }
 
@@ -633,7 +890,6 @@ static int ak449x_startup(struct snd_pcm_substream *substream,
 {
 	int ret;
 
-	ak449x_debug("%s\n", __FUNCTION__);
 	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
 					 SNDRV_PCM_HW_PARAM_RATE,
 					 &ak449x_rate_constraints);
@@ -662,8 +918,8 @@ static struct snd_soc_dai_driver ak449x_dai = {
 
 static void ak449x_power_off(struct ak449x_priv *ak449x)
 {
-	if (ak449x->reset_gpiod) {
-		ak449x_debug("%s\n", __FUNCTION__);
+	if (ak449x_reset != 0 && ak449x->reset_gpiod) {
+		dev_dbg(ak449x->dev, "%s\n", __FUNCTION__);
 		gpiod_set_value_cansleep(ak449x->reset_gpiod, 1); // pdn enable
 		usleep_range(1000, 2000);
 	}
@@ -671,49 +927,57 @@ static void ak449x_power_off(struct ak449x_priv *ak449x)
 
 static void ak449x_power_on(struct ak449x_priv *ak449x)
 {
-	if (ak449x->reset_gpiod) {
-		ak449x_debug("%s\n", __FUNCTION__);
+	if ( ak449x_reset != 1 && ak449x->reset_gpiod) {
+		ak449x_reset = 1;
+		dev_dbg(ak449x->dev, "%s\n", __FUNCTION__);
 		gpiod_set_value_cansleep(ak449x->reset_gpiod, 0); // pdn disable
 		usleep_range(1000, 2000);
 	}
 }
 
-static void ak449x_init(struct snd_soc_codec *codec)
+static int ak449x_init(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
+	int err;
 
-	dev_info(codec->dev, "%s\n", __FUNCTION__);
+	dev_dbg(codec->dev, "%s\n", __FUNCTION__);
 	/* External Mute ON */
 	if (ak449x->mute_gpiod)
 		gpiod_set_value_cansleep(ak449x->mute_gpiod, 1);
 
 	ak449x->mute = -1; /* reset mute state */
 
+	if (ak449x_reset == -1 ) ak449x_power_off(ak449x);
 	ak449x_power_on(ak449x);
 
-	snd_soc_update_bits(codec, AK449X_00_CONTROL1, 0x80, 0x80);   /* ACKS bit = 1; 10000000 */
+	err = snd_soc_update_bits(codec, AK449X_00_CONTROL1, 0x80, 0x80);   /* ACKS bit = 1; 10000000 */
+
+	if (err < 0) {
+		dev_err(codec->dev, "i2c failed.");
+		return err;
+	}
 	ak449x_chmode_set(codec);
 	ak449x_phase_set(codec);
 	ak449x_rstn_control(codec, 1);
+
+	return 0;
 }
 
 static int ak449x_probe(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 
-	dev_info(codec->dev, "%s\n", __FUNCTION__);
-	ak449x_init(codec);
+	dev_dbg(codec->dev, "%s\n", __FUNCTION__);
 
 	ak449x->fs = 48000;
 
-	return 0;
+	return ak449x_init(codec);
 }
 
 static int ak449x_remove(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
-
-	ak449x_debug("%s\n", __FUNCTION__);
+        dev_dbg(ak449x->dev, "%s\n", __FUNCTION__);
 	ak449x_power_off(ak449x);
 
 	return 0;
@@ -725,10 +989,13 @@ static int __maybe_unused ak449x_runtime_suspend(struct device *dev)
 {
 	struct ak449x_priv *ak449x = dev_get_drvdata(dev);
 
-	ak449x_debug("%s\n", __FUNCTION__);
+        dev_dbg(dev, "%s\n", __FUNCTION__);
 	regcache_cache_only(ak449x->regmap, true);
 
-	ak449x_power_off(ak449x);
+	if (ak449x_reset) {
+		ak449x_reset = 0;
+		ak449x_power_off(ak449x);
+	}
 
 	if (ak449x->mute_gpiod)
 		gpiod_set_value_cansleep(ak449x->mute_gpiod, 0);
@@ -740,12 +1007,15 @@ static int __maybe_unused ak449x_runtime_resume(struct device *dev)
 {
 	struct ak449x_priv *ak449x = dev_get_drvdata(dev);
 
-	ak449x_debug("%s\n", __FUNCTION__);
+        dev_dbg(dev, "%s\n", __FUNCTION__);
 	if (ak449x->mute_gpiod)
 		gpiod_set_value_cansleep(ak449x->mute_gpiod, 1);
 
-	ak449x_power_off(ak449x);
-	ak449x_power_on(ak449x);
+	if (ak449x_reset != 1) {
+		ak449x_reset = 1;
+//		ak449x_power_off(ak449x);
+		ak449x_power_on(ak449x);
+	}
 
 	regcache_cache_only(ak449x->regmap, false);
 	regcache_mark_dirty(ak449x->regmap);
@@ -754,19 +1024,6 @@ static int __maybe_unused ak449x_runtime_resume(struct device *dev)
 }
 #endif /* CONFIG_PM */
 
-static struct snd_soc_codec_driver soc_codec_driver_ak449x = {
-	.probe			= ak449x_probe,
-	.remove			= ak449x_remove,
-
-	.component_driver = {
-		.controls		= ak4495_snd_controls,
-		.num_controls		= ARRAY_SIZE(ak4495_snd_controls),
-		.dapm_widgets		= ak449x_dapm_widgets,
-		.num_dapm_widgets	= ARRAY_SIZE(ak449x_dapm_widgets),
-		.dapm_routes		= ak449x_intercon,
-		.num_dapm_routes	= ARRAY_SIZE(ak449x_intercon),
-	},
-};
 
 
 static struct regmap_config ak449x_regmap = {
@@ -785,48 +1042,151 @@ static const struct dev_pm_ops ak449x_pm = {
 				pm_runtime_force_resume)
 };
 
+int ak449x_setup_controls(struct ak449x_priv *ak449x)
+{
+	int num_controls = 0;
+	struct snd_kcontrol_new *controls = NULL;
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+	int num_controls_mc = 0;
+	struct snd_kcontrol_new *controls_mc = NULL;
+#endif
+	// allocate
+	if (ak449x->codec_drv) {
+		return -1;
+	}
+	ak449x->codec_drv = devm_kzalloc(ak449x->dev, sizeof(*ak449x->codec_drv), GFP_KERNEL);
+	if (ak449x->codec_drv == NULL)
+		return -ENOMEM;
+
+	// setup basic controls
+	ak449x->codec_drv->probe			= ak449x_probe;
+	ak449x->codec_drv->remove			= ak449x_remove;
+	ak449x->codec_drv->component_driver.dapm_widgets	= ak449x_dapm_widgets;
+	ak449x->codec_drv->component_driver.num_dapm_widgets	= ARRAY_SIZE(ak449x_dapm_widgets);
+	ak449x->codec_drv->component_driver.dapm_routes		= ak449x_intercon;
+	ak449x->codec_drv->component_driver.num_dapm_routes	= ARRAY_SIZE(ak449x_intercon);
+
+	// Select control override
+	if (ak449x->chip == AK449X_CHIP_AK4490) {
+		controls        = ak4490_snd_controls;
+		num_controls    = ARRAY_SIZE(ak4490_snd_controls);
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+		controls_mc     = ak4490_snd_controls_mc;
+		num_controls_mc = ARRAY_SIZE(ak4490_snd_controls_mc);
+#endif
+	}else
+	if (ak449x->chip == AK449X_CHIP_AK4497) {
+		controls        = ak4497_snd_controls;
+		num_controls    = ARRAY_SIZE(ak4497_snd_controls);
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+		controls_mc     = ak4497_snd_controls_mc;
+		num_controls_mc = ARRAY_SIZE(ak4497_snd_controls_mc);
+#endif
+	}else
+	if (ak449x->chip == AK449X_CHIP_AK4493) {
+		controls        = ak4493_snd_controls;
+		num_controls    = ARRAY_SIZE(ak4493_snd_controls);
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+		controls_mc     = ak4493_snd_controls_mc;
+		num_controls_mc = ARRAY_SIZE(ak4493_snd_controls_mc);
+#endif
+	}else{
+		controls        = ak4495_snd_controls;
+		num_controls    = ARRAY_SIZE(ak4495_snd_controls);
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+		controls_mc     = ak4495_snd_controls_mc;
+		num_controls_mc = ARRAY_SIZE(ak4495_snd_controls_mc);
+#endif
+	}
+
+	if ( (ak449x->chmode == AK449X_CHMODE_STEREO) ||
+	     (ak449x->chmode == AK449X_CHMODE_STEREO_INVERT) ) {
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+	  	struct snd_kcontrol_new *tmp_controls = NULL;
+		int i;
+
+		tmp_controls = devm_kzalloc(ak449x->dev, sizeof(struct snd_kcontrol_new) * num_controls, GFP_KERNEL);
+		if (tmp_controls == NULL)
+			return -ENOMEM;
+		// Multi Codec Mixer Rename
+		for ( i = 0 ; i < num_controls; i++) {
+			int j;
+			tmp_controls[i] = controls[i];
+			for ( j = 0; j < ARRAY_SIZE(ak449x_mc_texts_table); j++ ){
+				if (strncmp(tmp_controls[i].name,
+							ak449x_mc_texts_table[j][0],
+							strlen(ak449x_mc_texts_table[j][0])) == 0 ) {
+					dev_dbg( ak449x->dev, "rename mixer entry %s to %s", tmp_controls[i].name, ak449x_mc_texts_table[j][(ak449x->i2c_addr & 0x03) + 1]);
+					tmp_controls[i].name = ak449x_mc_texts_table[j][(ak449x->i2c_addr & 0x03) + 1];
+					break;
+				}
+			}
+		}
+		controls = tmp_controls;
+#endif
+		dev_info(ak449x->dev, "stereo mixer controls registered");
+		ak449x->codec_drv->component_driver.controls = controls; 
+		ak449x->codec_drv->component_driver.num_controls = num_controls;
+	}else{
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+		mutex_lock( &ak449x_lock);
+		if ( ak449x_master == NULL ) {
+			ak449x_master = ak449x;
+
+			ak449x->codec_drv->component_driver.controls = controls_mc;
+			ak449x->codec_drv->component_driver.num_controls = num_controls_mc;
+			dev_info(ak449x->dev, "multi-codec master controls registered");
+		}else{
+			struct ak449x_priv *ak449x_search = ak449x_master;
+			while (++ak449x_search->next != NULL);
+			ak449x_search->next = ak449x;
+
+			dev_info(ak449x->dev, "multi-codec slave controls registered");
+		}
+		mutex_unlock( &ak449x_lock);
+#endif
+	}
+	return 0;
+}
+
+
 static int ak449x_i2c_probe(struct i2c_client *i2c)
 {
 	struct ak449x_priv *ak449x;
 	int ret;
 
-	ak449x_debug("%s\n", __FUNCTION__);
+	dev_dbg(&i2c->dev, "%s\n", __FUNCTION__);
 	ak449x = devm_kzalloc(&i2c->dev, sizeof(*ak449x), GFP_KERNEL);
 	if (!ak449x){
 		dev_err(&i2c->dev, "nomem");
 		return -ENOMEM;
 	}
 
+	// Parse DT Options
 	ak449x_parse_device_tree_options(&i2c->dev, ak449x);
 
-	// Control override
-	if (ak449x->chip == AK449X_CHIP_AK4490) {
-		soc_codec_driver_ak449x.component_driver.controls = ak4490_snd_controls;
-		soc_codec_driver_ak449x.component_driver.num_controls = ARRAY_SIZE(ak4490_snd_controls);
-	}else
-	if (ak449x->chip == AK449X_CHIP_AK4497) {
-		soc_codec_driver_ak449x.component_driver.controls = ak4497_snd_controls;
-		soc_codec_driver_ak449x.component_driver.num_controls = ARRAY_SIZE(ak4497_snd_controls);
-	}else
-	if (ak449x->chip == AK449X_CHIP_AK4493) {
-		soc_codec_driver_ak449x.component_driver.controls = ak4493_snd_controls;
-		soc_codec_driver_ak449x.component_driver.num_controls = ARRAY_SIZE(ak4493_snd_controls);
-	}
-
-	// regmap override
+	// setup i2c regmap
 	if (ak449x->chip == AK449X_CHIP_AK4497 || ak449x->chip == AK449X_CHIP_AK4493) {
 		ak449x_regmap.max_register = AK449X_15_CONTROL8;
 		ak449x_regmap.reg_defaults = ak4497_reg_defaults;
 		ak449x_regmap.num_reg_defaults = ARRAY_SIZE(ak4497_reg_defaults);
 	}
 
-	// register i2c with regmap
 	ak449x->regmap = devm_regmap_init_i2c(i2c, &ak449x_regmap);
 	if (IS_ERR(ak449x->regmap))
 		return PTR_ERR(ak449x->regmap);
 
 	i2c_set_clientdata(i2c, ak449x);
 	ak449x->dev = &i2c->dev;
+#ifdef AK449X_SUPPORT_MULTICODEC_MIXER
+	ak449x->i2c_addr  = i2c->addr;
+	ak449x->mcvol_lch = 0xff;
+	ak449x->mcvol_rch = 0xff;
+#endif
+
+
+	// Setup Controls
+	ak449x_setup_controls(ak449x);
 
 	// setup gpios
 	ak449x->reset_gpiod = devm_gpiod_get_optional(ak449x->dev, "reset", GPIOD_OUT_LOW);
@@ -842,7 +1202,7 @@ static int ak449x_i2c_probe(struct i2c_client *i2c)
 	}
 
 	// register codec
-	ret = snd_soc_register_codec(ak449x->dev, &soc_codec_driver_ak449x, &ak449x_dai, 1);
+	ret = snd_soc_register_codec(ak449x->dev, ak449x->codec_drv, &ak449x_dai, 1);
 	if (ret < 0) {
 		dev_err(ak449x->dev, "Failed to register CODEC: %d\n", ret);
 		return ret;
