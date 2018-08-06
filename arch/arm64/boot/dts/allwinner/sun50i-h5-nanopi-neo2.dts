@@ -106,12 +106,13 @@
 
 	r-gpio-keys {
 		compatible = "gpio-keys";
-
+/*
 		sw4 {
 			label = "sw4";
 			linux,code = <BTN_0>;
 			gpios = <&pio 0 3 GPIO_ACTIVE_LOW>;
 		};
+*/
 	};
 
 	reg_usb0_vbus: usb0-vbus {
@@ -266,7 +267,7 @@
 };
 
 &hdmi {
-	status = "okay";
+	status = "disabled";
 };
 
 &ir {
