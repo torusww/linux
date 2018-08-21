@@ -168,6 +168,7 @@ struct priv {
 
 	int type;
 	int nchan;
+	unsigned int fs;
 
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
 
@@ -257,6 +258,9 @@ static int sun8i_i2s_lrclk_period_minimum_match(struct priv *priv, int sample_re
 	int min_match  = sample_resolution;
 	int max_period = PCM_LRCK_PERIOD;
 
+	if (priv->fs) {
+		return priv->fs >> 1;
+	}
 	// check max_period
 	while ( (max_period > PCM_LRCK_PERIOD_MAP_RESOLUTION) && !(priv->lrclk_period_map & PERIOD_TO_MAP(max_period)) )
 		max_period -= PCM_LRCK_PERIOD_MAP_RESOLUTION ;
@@ -744,6 +748,10 @@ static int sun8i_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 static int sun8i_i2s_set_bclk_ratio(struct snd_soc_dai *dai,
 				      unsigned int ratio)
 {
+	struct snd_soc_card *card = snd_soc_dai_get_drvdata(dai);
+	struct priv *priv = snd_soc_card_get_drvdata(card);
+
+	priv->fs = ratio;
 	return 0;
 }
 
