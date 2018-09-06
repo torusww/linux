@@ -24,7 +24,7 @@
 #include <linux/of_device.h>
 #include <linux/of_graph.h>
 
-#if (0)
+#if (1)
 #define DBGOUT(msg...)		do { printk(KERN_ERR msg); } while (0)
 #else
 #define DBGOUT(msg...)		do {} while (0)
@@ -168,11 +168,13 @@ struct priv {
 
 	int type;
 	int nchan;
-	unsigned int fs;
 
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
 
 	int clk_always_on;
+	
+	int fs;
+	int div;
 
 	unsigned int lrclk_period_map;
 	unsigned int mclk_mode;
@@ -261,6 +263,7 @@ static int sun8i_i2s_lrclk_period_minimum_match(struct priv *priv, int sample_re
 	if (priv->fs) {
 		return priv->fs >> 1;
 	}
+
 	// check max_period
 	while ( (max_period > PCM_LRCK_PERIOD_MAP_RESOLUTION) && !(priv->lrclk_period_map & PERIOD_TO_MAP(max_period)) )
 		max_period -= PCM_LRCK_PERIOD_MAP_RESOLUTION ;
@@ -286,12 +289,15 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate, int sample
 		1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 176, 192
 	};
 
-
 	/* calculate period */
 	period = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
 	DBGOUT("%s: rate = %lu. sample_resolution = %d period = %d", __func__, rate, sample_resolution, period);
 
 	/* compute the sys clock rate and divide values */
+	if (priv->div) {
+		div = priv->div;
+		freq = period * 2 * rate * div;
+	}else
 	if (priv->mclk_max_freq) {
 		// search mclk less than mclk_max_freq
 		for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++) {
@@ -487,6 +493,9 @@ static void sun8i_i2s_shutdown(struct snd_pcm_substream *substream,
 	regmap_update_bits(priv->regmap, I2S_CTL,
 			   I2S_CTL_GEN,
 			   0);
+	
+	priv->fs = 0;
+	priv->div = 0;
 }
 
 static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
@@ -752,6 +761,18 @@ static int sun8i_i2s_set_bclk_ratio(struct snd_soc_dai *dai,
 	struct priv *priv = snd_soc_card_get_drvdata(card);
 
 	priv->fs = ratio;
+
+	return 0;
+}
+
+static int sun8i_i2s_set_bclk_clkdiv(struct snd_soc_dai *dai,
+				      int div_id, int div)
+{
+	struct snd_soc_card *card = snd_soc_dai_get_drvdata(dai);
+	struct priv *priv = snd_soc_card_get_drvdata(card);
+
+	priv->div = div;
+
 	return 0;
 }
 
@@ -841,6 +862,7 @@ static const struct snd_soc_dai_ops sun8i_i2s_dai_ops = {
 	.hw_params	= sun8i_i2s_hw_params,
 	.set_fmt	= sun8i_i2s_set_fmt,
 	.set_bclk_ratio = sun8i_i2s_set_bclk_ratio,
+	.set_clkdiv = sun8i_i2s_set_bclk_clkdiv,
 	.shutdown	= sun8i_i2s_shutdown,
 	.startup	= sun8i_i2s_startup,
 	.trigger	= sun8i_i2s_trigger,
