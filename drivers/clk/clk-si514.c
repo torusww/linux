@@ -56,6 +56,9 @@ struct clk_si514 {
 	struct clk_hw hw;
 	struct regmap *regmap;
 	struct i2c_client *i2c_client;
+	
+	int oe_ctl;
+	int set_rate_always_on;
 };
 #define to_clk_si514(_hw)	container_of(_hw, struct clk_si514, hw)
 
@@ -241,7 +244,9 @@ static int si514_set_rate(struct clk_hw *hw, unsigned long rate,
 	if (err)
 		return err;
 
-	si514_enable_output(data, false);
+	if (!data->set_rate_always_on){
+		si514_enable_output(data, false);
+	}
 
 	err = si514_set_muldiv(data, &settings);
 	if (err < 0)
@@ -260,7 +265,36 @@ static int si514_set_rate(struct clk_hw *hw, unsigned long rate,
 	return err;
 }
 
+static int si514_prepare(struct clk_hw *hw)
+{
+	struct clk_si514 *data = to_clk_si514(hw);
+
+	if (data->oe_ctl) {
+		return si514_enable_output(data, true);
+	}
+
+	return 0;
+}
+
+static void si514_unprepare(struct clk_hw *hw)
+{
+	struct clk_si514 *data = to_clk_si514(hw);
+
+	if (data->oe_ctl) {
+		si514_enable_output(data, false);
+	}
+}
+static int si514_is_prepared(struct clk_hw *hw)
+{
+	struct clk_si514 *data = to_clk_si514(hw);
+
+	return true;
+}
+
 static const struct clk_ops si514_clk_ops = {
+	.prepare = si514_prepare,
+	.unprepare = si514_unprepare,
+	.is_prepared = si514_is_prepared,
 	.recalc_rate = si514_recalc_rate,
 	.round_rate = si514_round_rate,
 	.set_rate = si514_set_rate,
@@ -329,6 +363,13 @@ static int si514_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, data);
 
+	{ // i2c read check
+		int check;
+		if (regmap_read(data->regmap, 0, &check)) {
+			return -1;
+		}
+	}
+
 	err = devm_clk_hw_register(&client->dev, &data->hw);
 	if (err) {
 		dev_err(&client->dev, "clock registration failed\n");
@@ -339,6 +380,12 @@ static int si514_probe(struct i2c_client *client,
 	if (err) {
 		dev_err(&client->dev, "unable to add clk provider\n");
 		return err;
+	}
+
+	data->oe_ctl = 1;
+	data->set_rate_always_on = 1;
+	if (data->oe_ctl) {
+		si514_enable_output(data, false);
 	}
 
 	return 0;
