@@ -654,7 +654,7 @@ static int ak449x_phase_set(struct snd_soc_codec *codec)
 static int ak449x_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params,
 			    struct snd_soc_dai *dai)
-{                      
+{
 	struct snd_soc_codec *codec = dai->codec;
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 	int pcm_width = max(params_physical_width(params), ak449x->slot_width);
@@ -733,8 +733,7 @@ static int ak449x_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	case SND_SOC_DAIFMT_CBS_CFM:
 	case SND_SOC_DAIFMT_CBM_CFS:
 	default:
-		dev_err(codec->dev, "Master mode unsupported\n");
-		return -EINVAL;
+		dev_warn(codec->dev, "Master mode required external I2S master.\n");
 	}
 
 	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
@@ -872,29 +871,10 @@ static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_p
 			 SNDRV_PCM_FMTBIT_S24_LE |\
 			 SNDRV_PCM_FMTBIT_S32_LE)
 
-static const unsigned int ak449x_rates[] = {
-	8000, 11025,  16000, 22050,
-	32000, 44100, 48000, 88200,
-	96000, 176400, 192000, 352800,
-	384000, 705600, 768000, 1411200,
-	1536000,
-};
-
-static const struct snd_pcm_hw_constraint_list ak449x_rate_constraints = {
-	.count = ARRAY_SIZE(ak449x_rates),
-	.list = ak449x_rates,
-};
-
 static int ak449x_startup(struct snd_pcm_substream *substream,
 			  struct snd_soc_dai *dai)
 {
-	int ret;
-
-	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
-					 SNDRV_PCM_HW_PARAM_RATE,
-					 &ak449x_rate_constraints);
-
-	return ret;
+	return 0;
 }
 
 static struct snd_soc_dai_ops ak449x_dai_ops = {
@@ -910,7 +890,9 @@ static struct snd_soc_dai_driver ak449x_dai = {
 		.stream_name = "Playback",
 		.channels_min = 2,
 		.channels_max = 2,
-		.rates = SNDRV_PCM_RATE_KNOT,
+		.rates =        SNDRV_PCM_RATE_CONTINUOUS,
+		.rate_min =     8000,
+		.rate_max =     1536000,
 		.formats = AK449X_FORMATS,
 	},
 	.ops = &ak449x_dai_ops,
