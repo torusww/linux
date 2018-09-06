@@ -21,6 +21,15 @@ dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_ds.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_dm_bal.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_dm_unbal.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_cbmclk.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_ds_cbmclk.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_dm_bal_cbmclk.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-generic_mclk_ak449x_dm_unbal_cbmclk.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s-cbmclk.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-pcm_rj16_32fs_cbmclk.dtb
+
+
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2_fbtft.dtb
 always		:= $(dtb-y)
 subdir-y	:= $(dts-dirs)
 clean-files	:= *.dtb

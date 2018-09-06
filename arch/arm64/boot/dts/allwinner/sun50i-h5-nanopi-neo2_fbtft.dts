@@ -394,7 +394,7 @@
     spidev0: spi@0 {
         compatible = "nanopi,spidev";
         reg = <0>;
-        status = "okay";
+        status = "disabled";
 
         spi-max-frequency = <10000000>;
     };
@@ -458,7 +458,7 @@
 	ipslcd13: ipslcd13@0{
 		compatible = "sitronix,st7789v";
 		reg = <0>;
-		status = "disabled";
+		status = "okay";
 		spi-max-frequency = <50000000>;
 		rotate = <0>;
 		fps = <33>;
