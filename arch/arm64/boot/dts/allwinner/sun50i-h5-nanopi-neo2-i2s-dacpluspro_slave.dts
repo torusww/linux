@@ -41,7 +41,7 @@
  */
 
 /dts-v1/;
-#include "sun50i-h5-nanopi-neo2-audio.dts"
+#include "sun50i-h5-nanopi-neo2.dts"
 
 
 / {
