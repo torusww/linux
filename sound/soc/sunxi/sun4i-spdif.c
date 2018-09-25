@@ -17,6 +17,8 @@
  * GNU General Public License for more details.
  */
 
+#define DEBUG
+
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -169,6 +171,10 @@ struct sun4i_spdif_dev {
 	struct snd_soc_dai_driver cpu_dai_drv;
 	struct regmap *regmap;
 	struct snd_dmaengine_dai_dma_data dma_params_tx;
+
+	unsigned int txfifo_addr;
+	int max_rate;
+	int pre_start_wait;
 };
 
 static void sun4i_spdif_configure(struct sun4i_spdif_dev *host)
@@ -196,10 +202,6 @@ static void sun4i_snd_txctrl_on(struct snd_pcm_substream *substream,
 	regmap_update_bits(host->regmap, SUN4I_SPDIF_TXCFG,
 			   SUN4I_SPDIF_TXCFG_TXEN, SUN4I_SPDIF_TXCFG_TXEN);
 
-	/* DRQ ENABLE */
-	regmap_update_bits(host->regmap, SUN4I_SPDIF_INT,
-			   SUN4I_SPDIF_INT_TXDRQEN, SUN4I_SPDIF_INT_TXDRQEN);
-
 	/* Global enable */
 	regmap_update_bits(host->regmap, SUN4I_SPDIF_CTL,
 			   SUN4I_SPDIF_CTL_GEN, SUN4I_SPDIF_CTL_GEN);
@@ -212,13 +214,26 @@ static void sun4i_snd_txctrl_off(struct snd_pcm_substream *substream,
 	regmap_update_bits(host->regmap, SUN4I_SPDIF_TXCFG,
 			   SUN4I_SPDIF_TXCFG_TXEN, 0);
 
+	/* Global disable */
+	regmap_update_bits(host->regmap, SUN4I_SPDIF_CTL,
+			   SUN4I_SPDIF_CTL_GEN, 0);
+}
+
+static void sun4i_snd_txctrl_drqon(struct snd_pcm_substream *substream,
+				struct sun4i_spdif_dev *host)
+{
+	/* DRQ ENABLE */
+	regmap_update_bits(host->regmap, SUN4I_SPDIF_INT,
+			   SUN4I_SPDIF_INT_TXDRQEN, SUN4I_SPDIF_INT_TXDRQEN);
+}
+
+static void sun4i_snd_txctrl_drqoff(struct snd_pcm_substream *substream,
+				 struct sun4i_spdif_dev *host)
+{
 	/* DRQ DISABLE */
 	regmap_update_bits(host->regmap, SUN4I_SPDIF_INT,
 			   SUN4I_SPDIF_INT_TXDRQEN, 0);
 
-	/* Global disable */
-	regmap_update_bits(host->regmap, SUN4I_SPDIF_CTL,
-			   SUN4I_SPDIF_CTL_GEN, 0);
 }
 
 static int sun4i_spdif_startup(struct snd_pcm_substream *substream,
@@ -230,6 +245,9 @@ static int sun4i_spdif_startup(struct snd_pcm_substream *substream,
 	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
 		return -EINVAL;
 
+	snd_pcm_hw_constraint_minmax(substream->runtime, SNDRV_PCM_HW_PARAM_RATE,
+		22050, host->max_rate);
+	dev_dbg(&host->pdev->dev, "max_rate = %d\n", host->max_rate);
 	sun4i_spdif_configure(host);
 
 	return 0;
@@ -240,10 +258,11 @@ static int sun4i_spdif_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_soc_dai *cpu_dai)
 {
 	int ret = 0;
-	int fmt;
+	int fmt = 0;
 	unsigned long rate = params_rate(params);
 	u32 mclk_div = 0;
 	unsigned int mclk = 0;
+	unsigned int bitdepth = 0;
 	u32 reg_val;
 	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(cpu_dai);
 	struct platform_device *pdev = host->pdev;
@@ -264,12 +283,23 @@ static int sun4i_spdif_hw_params(struct snd_pcm_substream *substream,
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
 		fmt |= SUN4I_SPDIF_TXCFG_FMT16BIT;
+		bitdepth = 16;
+		host->dma_params_tx.addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
 		break;
 	case SNDRV_PCM_FORMAT_S20_3LE:
 		fmt |= SUN4I_SPDIF_TXCFG_FMT20BIT;
+		bitdepth = 20;
+		host->dma_params_tx.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
 		fmt |= SUN4I_SPDIF_TXCFG_FMT24BIT;
+		bitdepth = 24;
+		host->dma_params_tx.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
+		break;
+	case SNDRV_PCM_FORMAT_S32_LE:
+		fmt |= SUN4I_SPDIF_TXCFG_FMT24BIT;
+		bitdepth = 32;
+		host->dma_params_tx.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 		break;
 	default:
 		return -EINVAL;
@@ -289,19 +319,44 @@ static int sun4i_spdif_hw_params(struct snd_pcm_substream *substream,
 	case 192000:
 		mclk = 24576000;
 		break;
+	case 352800:
+		mclk = 45158400;
+		break;
+	case 384000:
+		mclk = 49152000;
+		break;
+	case 705600:
+		mclk = 90316800;
+		break;
+	case 768000:
+		mclk = 98304000;
+		break;
 	default:
 		return -EINVAL;
 	}
 
+	dev_dbg(&pdev->dev, "freq = %ld, bit depth = %d, set rate = %d", rate, bitdepth, mclk);
 	ret = clk_set_rate(host->spdif_clk, mclk);
 	if (ret < 0) {
 		dev_err(&pdev->dev,
 			"Setting SPDIF clock rate for %d Hz failed!\n", mclk);
 		return ret;
 	}
+#ifdef DEBUG
+	{
+		unsigned long actual_rate = clk_get_rate(host->spdif_clk);
+		long error_rate  = ((long)actual_rate * 1000000 / (long)mclk ) - 1000000;
+		dev_dbg(&pdev->dev,"mclk actual freq = %lu. error = %ld ppm", actual_rate, error_rate);
+	}
+#endif
 
-	regmap_update_bits(host->regmap, SUN4I_SPDIF_FCTL,
+	if ( bitdepth == 32 ) {
+		regmap_update_bits(host->regmap, SUN4I_SPDIF_FCTL,
+			   SUN4I_SPDIF_FCTL_TXIM, 0);
+	}else{
+		regmap_update_bits(host->regmap, SUN4I_SPDIF_FCTL,
 			   SUN4I_SPDIF_FCTL_TXIM, SUN4I_SPDIF_FCTL_TXIM);
+	}
 
 	switch (rate) {
 	case 22050:
@@ -321,6 +376,10 @@ static int sun4i_spdif_hw_params(struct snd_pcm_substream *substream,
 		break;
 	case 176400:
 	case 192000:
+	case 352800:
+	case 384000:
+	case 705600:
+	case 768000:
 		mclk_div = 1;
 		break;
 	default:
@@ -334,6 +393,17 @@ static int sun4i_spdif_hw_params(struct snd_pcm_substream *substream,
 	reg_val |= SUN4I_SPDIF_TXCFG_TXRATIO(mclk_div - 1);
 	regmap_write(host->regmap, SUN4I_SPDIF_TXCFG, reg_val);
 
+	// TX ON
+	sun4i_snd_txctrl_on(substream, host);
+
+	// send null data
+	if( host->pre_start_wait ){
+		dev_dbg(&pdev->dev,"Pre start wait %d ms", host->pre_start_wait * 100);
+		regmap_write(host->regmap, host->txfifo_addr, 0x0);
+		regmap_write(host->regmap, host->txfifo_addr, 0x0);
+
+		usleep_range(host->pre_start_wait * 100000, host->pre_start_wait * 100000 + 10000);
+	}
 	return 0;
 }
 
@@ -350,13 +420,13 @@ static int sun4i_spdif_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		sun4i_snd_txctrl_on(substream, host);
+		sun4i_snd_txctrl_drqon(substream, host);
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		sun4i_snd_txctrl_off(substream, host);
+		sun4i_snd_txctrl_drqoff(substream, host);
 		break;
 
 	default:
@@ -366,18 +436,109 @@ static int sun4i_spdif_trigger(struct snd_pcm_substream *substream, int cmd,
 	return ret;
 }
 
+static void sun4i_spdif_shutdown(struct snd_pcm_substream *substream,
+				 struct snd_soc_dai *dai)
+{
+	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(dai);
+	sun4i_snd_txctrl_off(substream, host);
+}
+
+
+static const char * const sun4i_spdif_prestartwait_select_texts[] = {
+	"No Wait", "100ms"  , "200ms",
+	"300ms"  , "400ms"  , "500ms",
+	"600ms"  , "700ms"  , "800ms",
+	"900ms"  , "1000ms" , "1100ms",
+	"1200ms" , "1300ms" , "1400ms",
+	"1500ms" , "1600ms" , "1800ms",
+	"2000ms" , "2200ms" , "2400ms",
+	"2600ms" , "2800ms" , "3000ms",
+};
+
+static const struct soc_enum sun4i_spdif_prestartwait_enum =
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(sun4i_spdif_prestartwait_select_texts),
+		sun4i_spdif_prestartwait_select_texts);
+
+static int sun4i_spdif_get_prestartwait(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *cpu_dai = snd_kcontrol_chip(kcontrol);
+	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(cpu_dai);
+
+	ucontrol->value.enumerated.item[0] = host->pre_start_wait;
+
+	return 0;
+}
+
+static int sun4i_spdif_set_prestartwait(struct snd_kcontrol *kcontrol,
+                      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *cpu_dai = snd_kcontrol_chip(kcontrol);
+	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(cpu_dai);
+
+	host->pre_start_wait = ucontrol->value.enumerated.item[0];
+
+	return 0;
+}
+
+static const char * const sun4i_spdif_maxrate_select_texts[] = {
+	"768kHz", "384kHz" , "192kHz" , "96kHz", "48kHz", 
+};
+
+static const struct soc_enum sun4i_spdif_maxrate_enum =
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(sun4i_spdif_maxrate_select_texts),
+		sun4i_spdif_maxrate_select_texts);
+
+static int sun4i_spdif_get_maxrate(struct snd_kcontrol *kcontrol,
+		struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *cpu_dai = snd_kcontrol_chip(kcontrol);
+	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(cpu_dai);
+
+	int num = 0;
+	while (( 768000 >> num) != host->max_rate ) num++;
+	ucontrol->value.enumerated.item[0] = num;
+
+	return 0;
+}
+
+static int sun4i_spdif_set_maxrate(struct snd_kcontrol *kcontrol,
+                      struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *cpu_dai = snd_kcontrol_chip(kcontrol);
+	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(cpu_dai);
+	int shift;
+
+	shift = ucontrol->value.enumerated.item[0];
+	host->max_rate = 768000 >> shift;
+	if (host->max_rate < 48000) {
+		host->max_rate = 48000;
+	}
+
+	return 0;
+}
+
+static struct snd_kcontrol_new sun4i_spdif_snd_controls[] = {
+	SOC_ENUM_EXT("MaxSamplingRate", sun4i_spdif_maxrate_enum, sun4i_spdif_get_maxrate, sun4i_spdif_set_maxrate),
+	SOC_ENUM_EXT("PreStartWait", sun4i_spdif_prestartwait_enum, sun4i_spdif_get_prestartwait, sun4i_spdif_set_prestartwait),
+};
+
 static int sun4i_spdif_soc_dai_probe(struct snd_soc_dai *dai)
 {
 	struct sun4i_spdif_dev *host = snd_soc_dai_get_drvdata(dai);
 
 	snd_soc_dai_init_dma_data(dai, &host->dma_params_tx, NULL);
+	snd_soc_add_dai_controls(dai, sun4i_spdif_snd_controls, ARRAY_SIZE(sun4i_spdif_snd_controls));
 	return 0;
 }
+
+
 
 static const struct snd_soc_dai_ops sun4i_spdif_dai_ops = {
 	.startup	= sun4i_spdif_startup,
 	.trigger	= sun4i_spdif_trigger,
 	.hw_params	= sun4i_spdif_hw_params,
+	.shutdown	= sun4i_spdif_shutdown,
 };
 
 static const struct regmap_config sun4i_spdif_regmap_config = {
@@ -387,17 +548,17 @@ static const struct regmap_config sun4i_spdif_regmap_config = {
 	.max_register = SUN4I_SPDIF_RXCHSTA1,
 };
 
-#define SUN4I_RATES	SNDRV_PCM_RATE_8000_192000
-
-#define SUN4I_FORMATS	(SNDRV_PCM_FORMAT_S16_LE | \
-				SNDRV_PCM_FORMAT_S20_3LE | \
-				SNDRV_PCM_FORMAT_S24_LE)
+#define SUN4I_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE |\
+			 SNDRV_PCM_FMTBIT_S20_3LE |\
+			 SNDRV_PCM_FMTBIT_S24_LE)
 
 static struct snd_soc_dai_driver sun4i_spdif_dai = {
 	.playback = {
 		.channels_min = 1,
 		.channels_max = 2,
-		.rates = SUN4I_RATES,
+		.rates =    SNDRV_PCM_RATE_CONTINUOUS,
+		.rate_min = 22050,
+		.rate_max = 384000,
 		.formats = SUN4I_FORMATS,
 	},
 	.probe = sun4i_spdif_soc_dai_probe,
@@ -480,6 +641,7 @@ static int sun4i_spdif_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	host->pdev = pdev;
+	host->max_rate = 384000; // default 384kHz max
 
 	/* Initialize this copy of the CPU DAI driver structure */
 	memcpy(&host->cpu_dai_drv, &sun4i_spdif_dai, sizeof(sun4i_spdif_dai));
@@ -516,6 +678,7 @@ static int sun4i_spdif_probe(struct platform_device *pdev)
 	host->dma_params_tx.addr = res->start + quirks->reg_dac_txdata;
 	host->dma_params_tx.maxburst = 8;
 	host->dma_params_tx.addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
+	host->txfifo_addr = quirks->reg_dac_txdata;
 
 	platform_set_drvdata(pdev, host);
 

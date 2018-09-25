@@ -27,6 +27,7 @@
 #define STUB_RATES	SNDRV_PCM_RATE_8000_192000
 #define STUB_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE | \
 			SNDRV_PCM_FMTBIT_S20_3LE | \
+			 SNDRV_PCM_FMTBIT_S32_LE |\
 			SNDRV_PCM_FMTBIT_S24_LE)
 
 static const struct snd_soc_dapm_widget dit_widgets[] = {
@@ -52,7 +53,9 @@ static struct snd_soc_dai_driver dit_stub_dai = {
 		.stream_name	= "Playback",
 		.channels_min	= 1,
 		.channels_max	= 384,
-		.rates		= STUB_RATES,
+		.rates		=    SNDRV_PCM_RATE_CONTINUOUS,
+		.rate_min	= 8000,
+		.rate_max	= 768000,
 		.formats	= STUB_FORMATS,
 	},
 };
