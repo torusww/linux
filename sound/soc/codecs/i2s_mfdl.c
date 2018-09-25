@@ -396,7 +396,7 @@ static int snd_i2smfdl_hw_params(struct snd_pcm_substream *substream, struct snd
 		if ( ret < 0 ) {
 			ret = snd_i2smfdl_select_variable_clk(substream, params);
 		}
-	}else
+	}
 
 	// last pll
 	if ( ret < 0 ) {
