@@ -55,13 +55,23 @@ static struct ccu_nkmp pll_cpux_clk = {
  */
 #define SUN8I_H3_PLL_AUDIO_REG	0x008
 
-static SUNXI_CCU_NM_WITH_GATE_LOCK(pll_audio_base_clk, "pll-audio-base",
-				   "osc24M", 0x008,
-				   8, 7,	/* N */
-				   0, 5,	/* M */
-				   BIT(31),	/* gate */
-				   BIT(28),	/* lock */
-				   CLK_SET_RATE_UNGATE);
+static CLK_FIXED_FACTOR(
+			pll_audio_base_clk,
+			"pll-audio-base",
+			"osc24M",
+			21, 1,
+			CLK_SET_RATE_PARENT );
+
+static SUNXI_CCU_NM_WITH_GATE_LOCK(
+			pll_audio_clk,
+			"pll-audio",
+			"pll-audio-base",
+			0x008,		// RegOffset
+			8, 7,		// N
+			16, 4,		// P/
+			BIT(31),	// gate
+			BIT(28),	// lock
+			CLK_SET_RATE_UNGATE);
 
 static SUNXI_CCU_NM_WITH_FRAC_GATE_LOCK(pll_video_clk, "pll-video",
 					"osc24M", 0x0010,
@@ -399,19 +409,11 @@ static SUNXI_CCU_MP_WITH_MUX_GATE(spi1_clk, "spi1", mod0_default_parents, 0x0a4,
 				  BIT(31),	/* gate */
 				  0);
 
-static const char * const i2s_parents[] = { "pll-audio-8x", "pll-audio-4x",
-					    "pll-audio-2x", "pll-audio" };
-static SUNXI_CCU_MUX_WITH_GATE(i2s0_clk, "i2s0", i2s_parents,
-			       0x0b0, 16, 2, BIT(31), CLK_SET_RATE_PARENT);
 
-static SUNXI_CCU_MUX_WITH_GATE(i2s1_clk, "i2s1", i2s_parents,
-			       0x0b4, 16, 2, BIT(31), CLK_SET_RATE_PARENT);
-
-static SUNXI_CCU_MUX_WITH_GATE(i2s2_clk, "i2s2", i2s_parents,
-			       0x0b8, 16, 2, BIT(31), CLK_SET_RATE_PARENT);
-
-static SUNXI_CCU_M_WITH_GATE(spdif_clk, "spdif", "pll-audio",
-			     0x0c0, 0, 4, BIT(31), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE(i2s0_clk, "i2s0", "pll-audio", 0x0b0, BIT(31), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE(i2s1_clk, "i2s1", "pll-audio", 0x0b4, BIT(31), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE(i2s2_clk, "i2s2", "pll-audio",  0x0b8, BIT(31), CLK_SET_RATE_PARENT);
+static SUNXI_CCU_GATE(spdif_clk, "spdif", "pll-audio", 0x0c0, BIT(31), CLK_SET_RATE_PARENT);
 
 static SUNXI_CCU_GATE(usb_phy0_clk,	"usb-phy0",	"osc24M",
 		      0x0cc, BIT(8), 0);
@@ -499,7 +501,7 @@ static SUNXI_CCU_M_WITH_GATE(gpu_clk, "gpu", "pll-gpu",
 
 static struct ccu_common *sun8i_h3_ccu_clks[] = {
 	&pll_cpux_clk.common,
-	&pll_audio_base_clk.common,
+	&pll_audio_clk.common,
 	&pll_video_clk.common,
 	&pll_ve_clk.common,
 	&pll_ddr_clk.common,
@@ -612,7 +614,7 @@ static struct ccu_common *sun8i_h3_ccu_clks[] = {
 
 static struct ccu_common *sun50i_h5_ccu_clks[] = {
 	&pll_cpux_clk.common,
-	&pll_audio_base_clk.common,
+	&pll_audio_clk.common,
 	&pll_video_clk.common,
 	&pll_ve_clk.common,
 	&pll_ddr_clk.common,
@@ -718,23 +720,21 @@ static struct ccu_common *sun50i_h5_ccu_clks[] = {
 	&gpu_clk.common,
 };
 
-/* We hardcode the divider to 4 for now */
-static CLK_FIXED_FACTOR(pll_audio_clk, "pll-audio",
-			"pll-audio-base", 4, 1, CLK_SET_RATE_PARENT);
+/* We hardcode the divider to 21 for now. */
 static CLK_FIXED_FACTOR(pll_audio_2x_clk, "pll-audio-2x",
-			"pll-audio-base", 2, 1, CLK_SET_RATE_PARENT);
+			"pll-audio-base", 21, 2, CLK_SET_RATE_PARENT);	// Don't use
 static CLK_FIXED_FACTOR(pll_audio_4x_clk, "pll-audio-4x",
-			"pll-audio-base", 1, 1, CLK_SET_RATE_PARENT);
+			"pll-audio-base", 21, 4, CLK_SET_RATE_PARENT);	// Don't use
 static CLK_FIXED_FACTOR(pll_audio_8x_clk, "pll-audio-8x",
-			"pll-audio-base", 1, 2, CLK_SET_RATE_PARENT);
+			"pll-audio-base", 21, 8, CLK_SET_RATE_PARENT);	// Don't use
 static CLK_FIXED_FACTOR(pll_periph0_2x_clk, "pll-periph0-2x",
 			"pll-periph0", 1, 2, 0);
 
 static struct clk_hw_onecell_data sun8i_h3_hw_clks = {
 	.hws	= {
 		[CLK_PLL_CPUX]		= &pll_cpux_clk.common.hw,
-		[CLK_PLL_AUDIO_BASE]	= &pll_audio_base_clk.common.hw,
-		[CLK_PLL_AUDIO]		= &pll_audio_clk.hw,
+		[CLK_PLL_AUDIO_BASE]	= &pll_audio_base_clk.hw,
+		[CLK_PLL_AUDIO]		= &pll_audio_clk.common.hw,
 		[CLK_PLL_AUDIO_2X]	= &pll_audio_2x_clk.hw,
 		[CLK_PLL_AUDIO_4X]	= &pll_audio_4x_clk.hw,
 		[CLK_PLL_AUDIO_8X]	= &pll_audio_8x_clk.hw,
@@ -854,8 +854,8 @@ static struct clk_hw_onecell_data sun8i_h3_hw_clks = {
 static struct clk_hw_onecell_data sun50i_h5_hw_clks = {
 	.hws	= {
 		[CLK_PLL_CPUX]		= &pll_cpux_clk.common.hw,
-		[CLK_PLL_AUDIO_BASE]	= &pll_audio_base_clk.common.hw,
-		[CLK_PLL_AUDIO]		= &pll_audio_clk.hw,
+		[CLK_PLL_AUDIO_BASE]	= &pll_audio_base_clk.hw,
+		[CLK_PLL_AUDIO]		= &pll_audio_clk.common.hw,
 		[CLK_PLL_AUDIO_2X]	= &pll_audio_2x_clk.hw,
 		[CLK_PLL_AUDIO_4X]	= &pll_audio_4x_clk.hw,
 		[CLK_PLL_AUDIO_8X]	= &pll_audio_8x_clk.hw,
@@ -1134,11 +1134,31 @@ static void __init sunxi_h3_h5_ccu_init(struct device_node *node,
 		return;
 	}
 
-	/* Force the PLL-Audio-1x divider to 4 */
+	/* Force the PLL-Audio-1x divider to 21 */
 	val = readl(reg + SUN8I_H3_PLL_AUDIO_REG);
-	val &= ~GENMASK(19, 16);
-	writel(val | (3 << 16), reg + SUN8I_H3_PLL_AUDIO_REG);
+	val &= ~GENMASK(5, 0);
+	writel(val | (0x14 << 0), reg + SUN8I_H3_PLL_AUDIO_REG);
 
+	// I2S0
+	val = readl(reg + 0x0b0);
+	val &= ~GENMASK(17, 16);
+	writel(val | (0x3 << 16), reg + 0x0b0);
+	
+	// I2S1
+	val = readl(reg + 0x0b4);
+	val &= ~GENMASK(17, 16);
+	writel(val | (0x3 << 16), reg + 0x0b4);
+
+	// I2S2
+	val = readl(reg + 0x0b8);
+	val &= ~GENMASK(17, 16);
+	writel(val | (0x3 << 16), reg + 0x0b8);
+
+	// SPDIF
+	val = readl(reg + 0x0c0);
+	val &= ~GENMASK(3, 0);
+	writel(val | (0x0 << 0), reg + 0x0c0);
+	
 	sunxi_ccu_probe(node, reg, desc);
 
 	ccu_mux_notifier_register(pll_cpux_clk.common.hw.clk,
