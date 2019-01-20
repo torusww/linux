@@ -34,18 +34,28 @@
 #include <sound/jack.h>
 
 
+// external clock mode
+enum {
+	I2SMFDL_CLKMODE_NORMAL = 0,
+	I2SMFDL_CLKMODE_EXT_1CLK, // external BCLK
+	I2SMFDL_CLKMODE_EXT_3CLK, // external MCLK/BCLK/LRCLK
+};
+
+// external clk type for 1clk mode
 enum {
 	I2SMFDL_CLK_TYPE_FIXED = 0,
 	I2SMFDL_CLK_TYPE_VARIABLE,
 	I2SMFDL_CLK_TYPE_INTPLL,
 };
 
+// external clk order for 1clk mode
 enum {
 	I2SMFDL_CLKSEL_ORDER_VAR_FIX_PLL = 0,
 	I2SMFDL_CLKSEL_ORDER_FIX_VAR_PLL,
 	I2SMFDL_CLKSEL_ORDER_PLL,
 };
 
+// external clk resources
 struct i2smfdl_clks {
 	int type;
 	struct clk *clk;
@@ -53,18 +63,22 @@ struct i2smfdl_clks {
 	unsigned int freq;
 };
 
+// private data
 struct i2smfdl_priv {
 	struct device *dev;
 
+	int clk_mode;
 	struct i2smfdl_clks *clks;
 	int clks_num;
 	int clks_previd;
 
-	// parameter
+	// 1clk mode
 	int min_fs;
 	int max_fs;
-	unsigned int min_clk;
+	unsigned int min_bclk;
 	int clksel_order;
+
+	// fs limit
 	unsigned int max_rate;
 	unsigned int min_rate;
 
@@ -204,24 +218,26 @@ static int snd_i2smfdl_select_variable_clk(struct snd_pcm_substream *substream, 
 
 	for ( i = 0; i < i2smfdl->clks_num ; i++) {
 		unsigned int freq, real_freq;
-		int fs;
+		int base_fs, fs;
 		err = 0;
 
 		if (i2smfdl->clks[i].type != I2SMFDL_CLK_TYPE_VARIABLE || IS_ERR(i2smfdl->clks[i].clk)) {
 			continue;
 		}
 
-		freq = params_rate(params);
-		if (i2smfdl->min_fs) {
-			freq *= i2smfdl->min_fs;
-		}else{
-			freq *= params_width(params) * 2;
+		base_fs = params_width(params) * 2;
+		if (i2smfdl->min_fs && i2smfdl->min_fs > base_fs) {
+			base_fs = i2smfdl->min_fs;
+		}
+		freq = params_rate(params) * base_fs;
+
+		while ( freq <= i2smfdl->min_bclk )
+			freq = freq << 1;
+		fs = freq / params_rate(params);
+		if (i2smfdl->max_fs && i2smfdl->max_fs < fs) {
+			dev_warn(rtd->dev, "%s: fs too high. base_fs %d, calc fs %d, max fs %d", __FUNCTION__, base_fs, fs, i2smfdl->max_fs);
 		}
 
-		while ( freq <= i2smfdl->min_clk )
-			freq = freq << 1;
-
-		fs = freq / params_rate(params);
 		snd_i2smfdl_set_daifmt(substream, SND_SOC_DAIFMT_CBM_CFS);
 		err = clk_set_rate(i2smfdl->clks[i].clk, freq);
 		if (err) continue;
@@ -251,21 +267,24 @@ static int snd_i2smfdl_select_intpll_clk(struct snd_pcm_substream *substream, st
 	struct i2smfdl_priv *i2smfdl = snd_soc_card_get_drvdata(card);
 
 	unsigned int freq;
-	int fs;
+	int base_fs, fs;
 
 	dev_dbg(rtd->dev, "%s" , __FUNCTION__);
 
-	freq = params_rate(params);
-	if (i2smfdl->min_fs) {
-		freq *= i2smfdl->min_fs;
-	}else{
-		freq *= params_width(params) * 2;
+	base_fs = params_width(params) * 2;
+	if (i2smfdl->min_fs && i2smfdl->min_fs > base_fs) {
+		base_fs = i2smfdl->min_fs;
+	}
+	freq = params_rate(params) * base_fs;
+
+	while ( freq <= i2smfdl->min_bclk )
+		freq = freq << 1;
+	fs = freq / params_rate(params);
+
+	if (i2smfdl->max_fs && i2smfdl->max_fs < fs) {
+		dev_warn(rtd->dev, "%s: fs too high. base_fs %d, calc fs %d, max fs %d", __FUNCTION__, base_fs, fs, i2smfdl->max_fs);
 	}
 
-	while ( freq <= i2smfdl->min_clk )
-		freq = freq << 1;
-
-	fs = freq / params_rate(params);
 	snd_i2smfdl_set_daifmt(substream, SND_SOC_DAIFMT_CBS_CFS);
 	err = snd_i2smfdl_clkon(i2smfdl, true, -1);
 
@@ -275,6 +294,89 @@ static int snd_i2smfdl_select_intpll_clk(struct snd_pcm_substream *substream, st
 
 	return err;
 }
+
+static int snd_i2smfdl_set_ext1clk(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
+{
+	int ret = -1;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_card *card = rtd->card;
+	struct i2smfdl_priv *i2smfdl = snd_soc_card_get_drvdata(card);
+
+	// clock select order
+	if (i2smfdl->clksel_order == I2SMFDL_CLKSEL_ORDER_VAR_FIX_PLL) {
+		// variable clock 1st
+		ret = snd_i2smfdl_select_variable_clk(substream, params);
+		if ( ret < 0 ) {
+			ret = snd_i2smfdl_select_fixed_clk(substream, params);
+		}
+	}else
+	if (i2smfdl->clksel_order == I2SMFDL_CLKSEL_ORDER_FIX_VAR_PLL) {
+		// fixed clock 1st
+		ret = snd_i2smfdl_select_fixed_clk(substream, params);
+		if ( ret < 0 ) {
+			ret = snd_i2smfdl_select_variable_clk(substream, params);
+		}
+	}
+
+	// last pll
+	if ( ret < 0 ) {
+		ret = snd_i2smfdl_select_intpll_clk(substream, params);
+	}
+
+	return ret;
+}
+
+static int snd_i2smfdl_set_ext3clk(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
+{
+	int err = 0;
+
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_card *card = rtd->card;
+	struct i2smfdl_priv *i2smfdl = snd_soc_card_get_drvdata(card);
+
+	unsigned long mclk;
+	unsigned long bclk;
+	unsigned long lrclk;
+	unsigned long real_freq;
+	unsigned int fs;
+
+	dev_dbg(rtd->dev, "%s" , __FUNCTION__);
+
+	lrclk = params_rate(params);
+	fs = params_width(params) * 2;
+	if (i2smfdl->min_fs && i2smfdl->min_fs > fs) {
+		fs = i2smfdl->min_fs;
+	}
+	if (i2smfdl->max_fs && i2smfdl->max_fs < fs) {
+		fs = i2smfdl->max_fs;
+	}
+	mclk = bclk = lrclk * fs;
+
+	while ( mclk <= i2smfdl->min_bclk )
+		mclk = mclk << 1;
+
+	snd_i2smfdl_set_daifmt(substream, SND_SOC_DAIFMT_CBM_CFM);
+
+	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_set_rate(i2smfdl->clks[0].clk, mclk);
+	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_set_rate(i2smfdl->clks[1].clk, bclk);
+	if (!IS_ERR(i2smfdl->clks[2].clk)) clk_set_rate(i2smfdl->clks[2].clk, lrclk);
+
+	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_prepare_enable(i2smfdl->clks[0].clk);
+	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_prepare_enable(i2smfdl->clks[1].clk);
+	if (!IS_ERR(i2smfdl->clks[2].clk)) clk_prepare_enable(i2smfdl->clks[2].clk);
+	err = snd_soc_dai_set_bclk_ratio(cpu_dai, fs);
+
+	if (!IS_ERR(i2smfdl->clks[0].clk)){
+		real_freq = clk_get_rate(i2smfdl->clks[0].clk);
+	}else{
+		real_freq = clk_get_rate(i2smfdl->clks[1].clk);
+	}
+	dev_dbg(rtd->dev, "%s clk_set_rate = %ld / clk_get_rate = %ld / bclk = %ld / lrclk = %ld / fs = %d / sw = %d" , __FUNCTION__, mclk, real_freq, bclk, lrclk, fs, params_width(params));
+
+	return err;
+}
+
 
 static const char * const i2smfdl_clksel_order_select_texts[] = {
 	"Variable->Fixed->IntPLL",
@@ -369,42 +471,29 @@ static int snd_i2smfdl_init(struct snd_soc_pcm_runtime *rtd)
 
 static int snd_i2smfdl_hw_params(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
 {
-	int ret = -1;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-//	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct snd_soc_card *card = rtd->card;
 	struct i2smfdl_priv *i2smfdl = snd_soc_card_get_drvdata(card);
 
 	dev_dbg(rtd->dev, "%s rate = %d" , __FUNCTION__, params_rate(params));
 
 	// not use ext clock
-	if (i2smfdl->clks_num == 0) {
+	if ( i2smfdl->clk_mode == I2SMFDL_CLKMODE_NORMAL || i2smfdl->clks_num == 0) {
+		dev_dbg(rtd->dev, "%s external clk not set. (CBS_CFS mode)" , __FUNCTION__);
 		return 0;
 	}
 
-	// clock select order
-	if (i2smfdl->clksel_order == I2SMFDL_CLKSEL_ORDER_VAR_FIX_PLL) {
-		// variable clock 1st
-		ret = snd_i2smfdl_select_variable_clk(substream, params);
-		if ( ret < 0 ) {
-			ret = snd_i2smfdl_select_fixed_clk(substream, params);
-		}
-	}else
-	if (i2smfdl->clksel_order == I2SMFDL_CLKSEL_ORDER_FIX_VAR_PLL) {
-		// fixed clock 1st
-		ret = snd_i2smfdl_select_fixed_clk(substream, params);
-		if ( ret < 0 ) {
-			ret = snd_i2smfdl_select_variable_clk(substream, params);
-		}
+	// ext 3clock mode
+	if ( i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_3CLK ) {
+		dev_dbg(rtd->dev, "%s external clk set. (CBM_CFM 3clk mode)" , __FUNCTION__);
+		return snd_i2smfdl_set_ext3clk(substream, params);
 	}
 
-	// last pll
-	if ( ret < 0 ) {
-		ret = snd_i2smfdl_select_intpll_clk(substream, params);
-	}
-
-	return ret;
+	// ext 1clock mode
+	dev_dbg(rtd->dev, "%s external clk set. (CBM_CFS 1clk mode)" , __FUNCTION__);
+	return snd_i2smfdl_set_ext1clk(substream, params);
 }
+
 
 static int snd_i2smfdl_startup(
 	struct snd_pcm_substream *substream)
@@ -478,18 +567,6 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 		i2smfdl->lrclk_period_map = PERIOD_TO_MAP(32); // default 64fs only
 	}
 	DBGOUT("%s: i2smfdl->lrclk_period_map = %x\n", __func__, i2smfdl->lrclk_period_map);
-
-	/* get mclk max frequency */
-	{
-		u32 output;
-		i2smfdl->mclk_max_freq = 0;
-		ret = of_property_read_u32(dev->of_node, "mclk_max_freq", &output);
-		if (ret == 0){
-			i2smfdl->mclk_max_freq = output;
-			DBGOUT("%s: i2smfdl->mclk_max_freq = %d\n", __func__, i2smfdl->mclk_max_freq);
-		}
-	}
-
 #endif
 
 	/* get dai_fmt master override*/
@@ -575,6 +652,27 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 		}
 	}
 
+	/* get clk mode */
+	{
+		const char *output;
+		i2smfdl->clk_mode = I2SMFDL_CLKMODE_NORMAL;
+		ret = of_property_read_string(dev->of_node, "clk_mode", &output);
+		if (ret == 0){
+			if (!strncmp(output, "NORMAL", sizeof("NORMAL"))) {
+				i2smfdl->clk_mode = I2SMFDL_CLKMODE_NORMAL;
+			}else
+			if (!strncmp(output, "EXT_1CLK", sizeof("EXT_1CLK"))) {
+				i2smfdl->clk_mode = I2SMFDL_CLKMODE_EXT_1CLK;
+			}else
+			if (!strncmp(output, "EXT_3CLK", sizeof("EXT_3CLK"))) {
+				i2smfdl->clk_mode = I2SMFDL_CLKMODE_EXT_3CLK;
+			}
+		}
+
+		dev_info(dev, "clkmode = %s\n", output);
+	}
+
+
 	/* get clk always on */
 	{
 		u32 output;
@@ -586,12 +684,16 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 		}
 	}
 
-	// setup clocks
-	{
+	/* setup clocks */
+	if (i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_1CLK){
 		int clk_num, freq_num, gpio_num, i;
 		freq_num = of_property_count_u32_elems(dev->of_node, "fixed-freqs");
 		gpio_num = gpiod_count(dev, "en");
 		clk_num  = of_count_phandle_with_args(dev->of_node, "clocks", "#clock-cells");
+		if (freq_num < 0) freq_num = 0;
+		if (gpio_num < 0) gpio_num = 0;
+		if (clk_num  < 0) clk_num  = 0;
+		dev_dbg(dev, "freq_num %d / gpio_num %d / clk_num %d", freq_num, gpio_num, clk_num);
 		if ( freq_num == gpio_num ) {
 			i2smfdl->clks = devm_kzalloc(dev, sizeof(struct i2smfdl_clks) * (freq_num + clk_num), GFP_KERNEL);
 			for ( i = 0; i < freq_num; i++) {
@@ -607,11 +709,22 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 			}
 			i2smfdl->clks_num = freq_num + clk_num;
 		}
+		if (i2smfdl->clks_num == 0) {
+			// set internal pll only when nothing external clk
+			i2smfdl->clksel_order = I2SMFDL_CLKSEL_ORDER_PLL;
+		}
+	}else
+	if (i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_3CLK){
+		i2smfdl->clks_num = of_count_phandle_with_args(dev->of_node, "clocks", "#clock-cells");
+		i2smfdl->clks = devm_kzalloc(dev, sizeof(struct i2smfdl_clks) * 3, GFP_KERNEL);
+		i2smfdl->clks[0].clk = clk_get(dev, "mclk");
+		i2smfdl->clks[1].clk = clk_get(dev, "bclk");
+		i2smfdl->clks[2].clk = clk_get(dev, "lrclk");
 	}
 
-	// setup clock option
+	/* setup clock calculate options */
 	{
-		of_property_read_u32(dev->of_node, "min_clk", &i2smfdl->min_clk);
+		of_property_read_u32(dev->of_node, "min_bclk", &i2smfdl->min_bclk);
 		of_property_read_u32(dev->of_node, "min_fs", &i2smfdl->min_fs);
 		of_property_read_u32(dev->of_node, "max_fs", &i2smfdl->max_fs);
 		of_property_read_u32(dev->of_node, "max_rate", &i2smfdl->max_rate);
@@ -723,7 +836,7 @@ static int snd_i2smfdl_probe(struct platform_device *pdev)
 	// setup mixer
 	snd_i2smfdl.controls        = i2smfdl_snd_controls;
 	snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls);
-	if (i2smfdl->clks_num){
+	if (i2smfdl->clks_num && i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_1CLK){
 		snd_i2smfdl.controls        = i2smfdl_snd_controls_clk;
 		snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls_clk);
 	}
