@@ -80,6 +80,7 @@
         spiflash = &spiflash;
         pitft = &pitft;
         pitft_ts = &pitft_ts;
+		spdif = &spdif;
 	};
 
 	chosen {
@@ -495,3 +496,9 @@
 &i2s0 {
 	status = "disabled";
 };
+
+
+&spdif {
+	status = "okay";
+};
+
