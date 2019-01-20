@@ -16,6 +16,8 @@
  * option) any later version.
  */
 
+#define DEBUG
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/clk.h>
@@ -1344,6 +1346,7 @@ static int si5351_i2c_probe(struct i2c_client *client,
 	const char *parent_names[4];
 	u8 num_parents, num_clocks;
 	int ret, n;
+	unsigned int val;
 
 	ret = si5351_dt_parse(client, variant);
 	if (ret)
@@ -1391,6 +1394,13 @@ static int si5351_i2c_probe(struct i2c_client *client,
 	if (drvdata->variant != SI5351_VARIANT_C)
 		si5351_set_bits(drvdata, SI5351_PLL_INPUT_SOURCE,
 				SI5351_PLLA_SOURCE | SI5351_PLLB_SOURCE, 0);
+
+	/* Disable clock output */
+	num_clocks = (drvdata->variant == SI5351_VARIANT_A3) ? 3 : 8;
+	for ( n = 0 ; n < num_clocks; n++) {
+		si5351_set_bits(drvdata, SI5351_CLK0_CTRL + n, SI5351_CLK_POWERDOWN, SI5351_CLK_POWERDOWN);
+		si5351_set_bits(drvdata, SI5351_OUTPUT_ENABLE_CTRL, (1 << n), (1 << n));
+	}
 
 	/* setup clock configuration */
 	for (n = 0; n < 2; n++) {
@@ -1461,6 +1471,15 @@ static int si5351_i2c_probe(struct i2c_client *client,
 	if (ret) {
 		dev_err(&client->dev, "unable to register %s\n", init.name);
 		goto err_clk;
+	}
+
+	/* setup crystal internal load capacitance */
+	if (!of_property_read_u32(client->dev.of_node, "xtal_cl", &val)) {
+		if (( val == 6 || val == 8 || val == 10)) {
+			si5351_set_bits(drvdata, SI5351_CRYSTAL_LOAD,
+							SI5351_CRYSTAL_LOAD_MASK, ((val >> 1) - 2) << 6);
+			dev_dbg(&client->dev, "Crystal Internal Load Capacitance set to %d pf", val);
+		}
 	}
 
 	/* register clkin input clock gate */
