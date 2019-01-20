@@ -293,76 +293,80 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate, int sample
 	period = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
 	DBGOUT("%s: rate = %lu. sample_resolution = %d period = %d", __func__, rate, sample_resolution, period);
 
-	/* compute the sys clock rate and divide values */
-	if (priv->div) {
-		div = priv->div;
-		freq = period * 2 * rate * div;
-	}else
-	if (priv->mclk_max_freq) {
-		// search mclk less than mclk_max_freq
-		for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++) {
-			if ((period * rate * 2 * div_tb[i]) > priv->mclk_max_freq ) {
-				break;
+	if ( (priv->dai_fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_CBS_CFS) {
+		/* compute the sys clock rate and divide values */
+		if (priv->div) {
+			div = priv->div;
+			freq = period * 2 * rate * div;
+		}else
+		if (priv->mclk_max_freq) {
+			// search mclk less than mclk_max_freq
+			for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++) {
+				if ((period * rate * 2 * div_tb[i]) > priv->mclk_max_freq ) {
+					break;
+				}
 			}
-		}
-		// error check
-		if ( i == 0 ) {
-			pr_info("Setting sysclk rate %lu is not supported. (search mclk)\n", rate );
-			return -EINVAL;
-		}
-		// calcurate mclk & bclk div
-		freq = period * rate * 2 * div_tb[i-1];
-		div  = div_tb[i-1];
+			// error check
+			if ( i == 0 ) {
+				pr_info("Setting sysclk rate %lu is not supported. (search mclk)\n", rate );
+				return -EINVAL;
+			}
+			// calcurate mclk & bclk div
+			freq = period * rate * 2 * div_tb[i-1];
+			div  = div_tb[i-1];
 
-	}else{
-		if ((rate % 11025) == 0)
-			freq	= 22579200;
-		else if ((rate % 8000) == 0)
-			freq	= 24576000;
-		else {
+		}else{
+			if ((rate % 11025) == 0)
+				freq	= 22579200;
+			else if ((rate % 8000) == 0)
+				freq	= 24576000;
+			else {
+				pr_info("Setting sysclk rate %lu is not supported.\n", rate );
+				return -EINVAL;
+			}
+
+			while( freq < (rate * 2 * period) ) {
+				freq	*= 2;
+			}
+
+			div = freq / 2 / period / rate;
+		}
+
+		if (priv->type == SOC_A83T)
+			div /= 2;			/* bclk_div==0 => mclk/2 */
+
+		for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++)
+			if (div_tb[i] >= div)
+				break;
+
+		DBGOUT("%s: mclk freq = %lu. bclk div = %u. CLKD_BCLKDIV = %u", __func__, freq, div, i+1);
+
+		if (100000000 < freq) {
 			pr_info("Setting sysclk rate %lu is not supported.\n", rate );
 			return -EINVAL;
+ 		}
+
+		ret = clk_set_rate(priv->mod_clk, freq);
+		if (ret) {
+			pr_info("Setting sysclk rate failed %d\n", ret);
+			return ret;
+		}
+		{
+			unsigned long actual_rate = clk_get_rate(priv->mod_clk);
+			long error_rate  = 1000000 - ((long)freq * 1000000 / (long)actual_rate);
+			DBGOUT("%s: mclk actual freq = %lu. error = %ld ppm", __func__, actual_rate, error_rate);
 		}
 
-		while( freq < (rate * 2 * period) ) {
-			freq	*= 2;
+		/* set the mclk and bclk dividor register */
+		if (priv->type == SOC_A83T) {
+			regmap_write(priv->regmap, I2S_CLKD,
+				     I2S_CLKD_A83T_MCLKOEN | I2S_CLKD_MCLKDIV(i));
+		} else {
+			regmap_write(priv->regmap, I2S_CLKD,
+				     I2S_CLKD_H3_MCLKOEN | I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
 		}
-
-		div = freq / 2 / period / rate;
-	}
-
-	if (priv->type == SOC_A83T)
-		div /= 2;			/* bclk_div==0 => mclk/2 */
-
-	for (i = 0; i < ARRAY_SIZE(div_tb) - 1; i++)
-		if (div_tb[i] >= div)
-			break;
-
-	DBGOUT("%s: mclk freq = %lu. bclk div = %u. CLKD_BCLKDIV = %u", __func__, freq, div, i+1);
-
-	if (100000000 < freq) {
-		pr_info("Setting sysclk rate %lu is not supported.\n", rate );
-		return -EINVAL;
- 	}
-
-	ret = clk_set_rate(priv->mod_clk, freq);
-	if (ret) {
-		pr_info("Setting sysclk rate failed %d\n", ret);
-		return ret;
-	}
-	{
-		unsigned long actual_rate = clk_get_rate(priv->mod_clk);
-		long error_rate  = 1000000 - ((long)freq * 1000000 / (long)actual_rate);
-		DBGOUT("%s: mclk actual freq = %lu. error = %ld ppm", __func__, actual_rate, error_rate);
-	}
-
-	/* set the mclk and bclk dividor register */
-	if (priv->type == SOC_A83T) {
-		regmap_write(priv->regmap, I2S_CLKD,
-			     I2S_CLKD_A83T_MCLKOEN | I2S_CLKD_MCLKDIV(i));
-	} else {
-		regmap_write(priv->regmap, I2S_CLKD,
-			     I2S_CLKD_H3_MCLKOEN | I2S_CLKD_MCLKDIV(1) | I2S_CLKD_BCLKDIV(i + 1));
+	}else{
+		DBGOUT("%s: skip pll clk_set_rate. (not in CBS_CFS mode)", __func__);
 	}
 
 	/* format */
