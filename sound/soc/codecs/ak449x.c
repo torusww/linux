@@ -783,14 +783,32 @@ static int ak449x_set_dai_mute(struct snd_soc_dai *dai, int mute)
 
 	if (mute) {
 		ret = snd_soc_update_bits(codec, AK449X_01_CONTROL2, 0x01, 1);
+#ifndef AK449X_SUPPORT_MULTICODEC_MIXER
 		mdelay(ndt);
 		if (ak449x->mute_gpiod)
 			gpiod_set_value_cansleep(ak449x->mute_gpiod, 1);
+#else
+		if (ak449x->next == NULL) { // Execute wait processing only at the last codec
+			struct ak449x_priv *ak449x_target = ak449x_master ? ak449x_master : ak449x;
+			mdelay(ndt);
+			mutex_lock( &ak449x_lock);
+			if (ak449x_target->mute_gpiod) {
+				gpiod_set_value_cansleep(ak449x_target->mute_gpiod, 1);
+			}
+			mutex_unlock( &ak449x_lock);
+		}
+#endif
 	} else {
 		if (ak449x->mute_gpiod)
 			gpiod_set_value_cansleep(ak449x->mute_gpiod, 0);
 		ret = snd_soc_update_bits(codec, AK449X_01_CONTROL2, 0x01, 0);
+#ifndef AK449X_SUPPORT_MULTICODEC_MIXER
 		mdelay(ndt);
+#else
+		if (ak449x->next == NULL) { // Execute wait processing only at the last codec
+			mdelay(ndt);
+		}
+#endif
 	}
 
 	return 0;
@@ -1178,7 +1196,7 @@ static int ak449x_i2c_probe(struct i2c_client *i2c)
 		return PTR_ERR(ak449x->reset_gpiod);
 	}
 
-	ak449x->mute_gpiod = devm_gpiod_get_optional(ak449x->dev, "mute", GPIOD_OUT_LOW);
+	ak449x->mute_gpiod = devm_gpiod_get_optional(ak449x->dev, "mute", GPIOD_OUT_HIGH);
 	if (IS_ERR(ak449x->mute_gpiod)) {
 		dev_err(ak449x->dev, "error requesting mute-gpios: %ld\n", PTR_ERR(ak449x->mute_gpiod));
 		return PTR_ERR(ak449x->mute_gpiod);
