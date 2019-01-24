@@ -115,6 +115,7 @@
 			silabs,clock-source = <0>;
 			silabs,pll-master;
 			silabs,disable-state = <2>;
+			clock-frequency = <22579200>;
 		};
 
 		clkout1 {
@@ -123,6 +124,7 @@
 			silabs,multisynth-source = <0>;
 			silabs,clock-source = <0>;
 			silabs,disable-state = <2>;
+			clock-frequency = <2822400>;
 		};
 
 		clkout2 {
@@ -131,6 +133,7 @@
 			silabs,multisynth-source = <0>;
 			silabs,clock-source = <0>;
 			silabs,disable-state = <2>;
+			clock-frequency = <44100>;
 		};
 	};
 };

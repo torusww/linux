@@ -51,7 +51,7 @@
 	sound {
 		compatible = "i2smfdl,multi-function-dai-link";
 		i2s-controller = <&i2s0>;
-		i2s-codec = <&ak449x>;
+		i2s-codec = <&ak449x1 &ak449x2>;
 		status = "okay";
 
 		clk_mode = "EXT_3CLK";
@@ -90,19 +90,31 @@
 &i2c0 {
 	status = "okay";
 
-	ak449x: ak449x-codec@10 {
-		#sound-dai-cells = <0>;
-		compatible = "asahi-kasei,ak449x";
-		reg = <0x10>; /* I2C addr */
-		status = "okay";
+	ak449x1: ak449x-codec@10 {
+			#sound-dai-cells = <0>;
+			compatible = "asahi-kasei,ak449x";
+			reg = <0x10>; /* I2C addr */
+			status = "okay";
 
-		chip = "AK4495"; /* AK4490/AK4495/AK4497/AK4493 */
-		chmode = "STEREO"; /* STEREO/STEREO_INVERT/MONO_LCH/MONO_RCH */
-/*		phase = "LNRN"; */ /* LNRN LNRI LIRN LIRI - N=non-invert I=invert*/
-		reset-gpios = <&pio 6 7 GPIO_ACTIVE_LOW>; /* PG7 */ /* pdn pin */
-		mute-gpios = <&pio 6 8 GPIO_ACTIVE_LOW>; /* PG8 */ /* external mute */
+			chip = "AK4495"; /* AK4490/AK4495/AK4497/AK4493 */
+			chmode = "MONO_LCH"; /* STEREO/STEREO_INVERT/MONO_LCH/MONO_RCH */
+			phase = "LIRN";  /* LNRN LNRI LIRN LIRI - N=non-invert I=invert*/
+			reset-gpios = <&pio 6 7 GPIO_ACTIVE_LOW>; /* PG7 */ /* pdn pin */
+			mute-gpios = <&pio 6 8 GPIO_ACTIVE_LOW>; /* PG8 */ /* external mute */
 	};
 
+	ak449x2: ak449x-codec@11 {
+			#sound-dai-cells = <0>;
+			compatible = "asahi-kasei,ak449x";
+			reg = <0x11>; /* I2C addr */
+			status = "okay";
+
+			chip = "AK4495"; /* AK4490/AK4495/AK4497/AK4493 */
+			chmode = "MONO_RCH"; /* STEREO/STEREO_INVERT/MONO_LCH/MONO_RCH */
+			phase = "LIRN"; /* LNRN LNRI LIRN LIRI - N=non-invert I=invert*/
+/*                reset-gpios = <&pio 6 11 GPIO_ACTIVE_LOW>; */ /* PG7 */ /* pdn pin */
+/*                mute-gpios = <&pio 6 6 GPIO_ACTIVE_HIGH>; */ /* PG6 */ /* external mute */
+	};
 
 	si5351: clock-generator {
 		compatible = "silabs,si5351a-msop";
