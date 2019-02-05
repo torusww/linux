@@ -1137,5 +1137,8 @@ config SND_SOC_TPA6130A2
 config SND_SOC_I2SMFDL
 	tristate "Support I2S Multi Function Dai Link"
 
+config SND_SOC_NULLCODEC
+	tristate "Nullcodec driver"
+
 endmenu
 
