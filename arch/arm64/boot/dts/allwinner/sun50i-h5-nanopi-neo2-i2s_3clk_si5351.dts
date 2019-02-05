@@ -59,11 +59,12 @@
 		i2s-codec = <&pcm5102a>;
 		status = "okay";
 
+		daifmt_master_override = "CBM_CFM";
 		clk_mode = "EXT_3CLK";
 		clocks = <&si5351 0>, <&si5351 1>, <&si5351 2>;
 		clock-names = "mclk", "bclk", "lrclk";
-
-		daifmt_master_override = "CBM_CFM";
+		min_mclk = <20000000>;
+		min_fs = <64>;
 	};
 
 	clocks {

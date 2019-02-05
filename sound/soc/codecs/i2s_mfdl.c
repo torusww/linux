@@ -34,18 +34,18 @@
 #include <sound/jack.h>
 
 
-// external clock mode
+// clock mode
 enum {
-	I2SMFDL_CLKMODE_NORMAL = 0,
-	I2SMFDL_CLKMODE_EXT_1CLK, // external BCLK
-	I2SMFDL_CLKMODE_EXT_3CLK, // external MCLK/BCLK/LRCLK
+	I2SMFDL_CLKMODE_NORMAL = 0, // normal operation
+	I2SMFDL_CLKMODE_EXT_1CLK,   // external BCLK or HIBCLK
+	I2SMFDL_CLKMODE_EXT_3CLK,   // external MCLK/BCLK/LRCLK
+	I2SMFDL_CLKMODE_HIBCLK,     // internal PLL Generate HIBCLK
 };
 
 // external clk type for 1clk mode
 enum {
 	I2SMFDL_CLK_TYPE_FIXED = 0,
 	I2SMFDL_CLK_TYPE_VARIABLE,
-	I2SMFDL_CLK_TYPE_INTPLL,
 };
 
 // external clk order for 1clk mode
@@ -76,7 +76,9 @@ struct i2smfdl_priv {
 	int min_fs;
 	int max_fs;
 	unsigned int min_bclk;
+	unsigned int min_mclk;
 	int clksel_order;
+	unsigned int intpll_fallback;
 
 	// fs limit
 	unsigned int max_rate;
@@ -142,12 +144,20 @@ static int snd_i2smfdl_set_daifmt(struct snd_pcm_substream *substream, unsigned 
 
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_card *card = rtd->card;
+	struct i2smfdl_priv *i2smfdl = snd_soc_card_get_drvdata(card);
+
+
+	if (!i2smfdl->intpll_fallback) {
+		dev_dbg(rtd->dev, "%s skip. internal pll fallback not allowed.", __FUNCTION__);
+		return 0;
+	}
 
 	dai->dai_fmt = (dai->dai_fmt & (~SND_SOC_DAIFMT_MASTER_MASK)) | dai_fmt;
 
 	if (dai->dai_fmt != dai_fmt_prev) {
 		snd_soc_dai_set_fmt(cpu_dai, dai->dai_fmt);
-		dev_dbg(rtd->dev, "daifmt change\n");
+		dev_dbg(rtd->dev, "%s daifmt change. %x to %x\n", __FUNCTION__, dai_fmt_prev, dai->dai_fmt);
 	}
 
 	return 0;
@@ -156,7 +166,7 @@ static int snd_i2smfdl_set_daifmt(struct snd_pcm_substream *substream, unsigned 
 static int snd_i2smfdl_select_fixed_clk(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
 {
 	int i;
-	int err = 0;
+	int err = -1;
 
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
@@ -207,7 +217,7 @@ static int snd_i2smfdl_select_fixed_clk(struct snd_pcm_substream *substream, str
 static int snd_i2smfdl_select_variable_clk(struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params)
 {
 	int i;
-	int err = 0;
+	int err = -1;
 
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
@@ -289,7 +299,7 @@ static int snd_i2smfdl_select_intpll_clk(struct snd_pcm_substream *substream, st
 	err = snd_i2smfdl_clkon(i2smfdl, true, -1);
 
 	err = snd_soc_dai_set_bclk_ratio(cpu_dai, fs);
-	err = snd_soc_dai_set_clkdiv(cpu_dai, 0, 1); // set div1
+	snd_soc_dai_set_clkdiv(cpu_dai, 0, 1); // set div1
 	dev_dbg(rtd->dev, "%s clk_set_rate = %d / fs = %d / sw = %d" , __FUNCTION__, freq, fs, params_width(params));
 
 	return err;
@@ -318,8 +328,8 @@ static int snd_i2smfdl_set_ext1clk(struct snd_pcm_substream *substream, struct s
 		}
 	}
 
-	// last pll
-	if ( ret < 0 ) {
+	// fallback to internal pll if it is allowed
+	if ( ret < 0 && i2smfdl->intpll_fallback ) {
 		ret = snd_i2smfdl_select_intpll_clk(substream, params);
 	}
 
@@ -351,11 +361,16 @@ static int snd_i2smfdl_set_ext3clk(struct snd_pcm_substream *substream, struct s
 	if (i2smfdl->max_fs && i2smfdl->max_fs < fs) {
 		fs = i2smfdl->max_fs;
 	}
-	mclk = bclk = lrclk * fs;
 
-	while ( mclk <= i2smfdl->min_bclk )
+	/* calcurate clk ratio */
+	mclk = bclk = lrclk * fs;
+	while ( mclk <= i2smfdl->min_mclk )
 		mclk = mclk << 1;
 
+	while ( bclk <= i2smfdl->min_bclk )
+		bclk = bclk << 1;
+
+	/* clk setup */
 	snd_i2smfdl_set_daifmt(substream, SND_SOC_DAIFMT_CBM_CFM);
 
 	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_set_rate(i2smfdl->clks[0].clk, mclk);
@@ -384,9 +399,17 @@ static const char * const i2smfdl_clksel_order_select_texts[] = {
 	"IntPLL Only",
 };
 
+static const char * const i2smfdl_clksel_order_wopll_select_texts[] = {
+	"Variable->Fixed",
+	"Fixed->Variable",
+};
+
 static const struct soc_enum i2smfdl_clksel_order_enum =
 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(i2smfdl_clksel_order_select_texts),
 			    i2smfdl_clksel_order_select_texts);
+static const struct soc_enum i2smfdl_clksel_order_wopll_enum =
+	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(i2smfdl_clksel_order_wopll_select_texts),
+			    i2smfdl_clksel_order_wopll_select_texts);
 
 static int snd_i2smfdl_get_clksel_order(struct snd_kcontrol *kcontrol,
 		      struct snd_ctl_elem_value *ucontrol)
@@ -461,6 +484,10 @@ static struct snd_kcontrol_new i2smfdl_snd_controls_clk[] = {
 	SOC_ENUM_EXT("MaxSamplingRate", i2smfdl_maxrate_enum, snd_i2smfdl_get_maxrate, snd_i2smfdl_set_maxrate),
 	SOC_ENUM_EXT("ClockSelectOrder", i2smfdl_clksel_order_enum, snd_i2smfdl_get_clksel_order, snd_i2smfdl_set_clksel_order),
 };
+static struct snd_kcontrol_new i2smfdl_snd_controls_clk_wopll[] = {
+	SOC_ENUM_EXT("MaxSamplingRate", i2smfdl_maxrate_enum, snd_i2smfdl_get_maxrate, snd_i2smfdl_set_maxrate),
+	SOC_ENUM_EXT("ClockSelectOrder", i2smfdl_clksel_order_wopll_enum, snd_i2smfdl_get_clksel_order, snd_i2smfdl_set_clksel_order),
+};
 
 static int snd_i2smfdl_init(struct snd_soc_pcm_runtime *rtd)
 {
@@ -481,6 +508,12 @@ static int snd_i2smfdl_hw_params(struct snd_pcm_substream *substream, struct snd
 	if ( i2smfdl->clk_mode == I2SMFDL_CLKMODE_NORMAL || i2smfdl->clks_num == 0) {
 		dev_dbg(rtd->dev, "%s external clk not set. (CBS_CFS mode)" , __FUNCTION__);
 		return 0;
+	}
+
+	// not use ext clock. hibclk mode.
+	if ( i2smfdl->clk_mode == I2SMFDL_CLKMODE_HIBCLK ) {
+		dev_dbg(rtd->dev, "%s external clk not set. (CBS_CFS hibclk mode)" , __FUNCTION__);
+		return snd_i2smfdl_select_intpll_clk(substream, params);
 	}
 
 	// ext 3clock mode
@@ -659,13 +692,24 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 		ret = of_property_read_string(dev->of_node, "clk_mode", &output);
 		if (ret == 0){
 			if (!strncmp(output, "NORMAL", sizeof("NORMAL"))) {
-				i2smfdl->clk_mode = I2SMFDL_CLKMODE_NORMAL;
+				/* check */
+				if ((dai->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBS_CFS ) {
+					dev_warn(dev, "dai_fmt not set CBS_CFS mode in normal mode.");
+				}
+			i2smfdl->clk_mode = I2SMFDL_CLKMODE_NORMAL;
 			}else
 			if (!strncmp(output, "EXT_1CLK", sizeof("EXT_1CLK"))) {
 				i2smfdl->clk_mode = I2SMFDL_CLKMODE_EXT_1CLK;
 			}else
 			if (!strncmp(output, "EXT_3CLK", sizeof("EXT_3CLK"))) {
-				i2smfdl->clk_mode = I2SMFDL_CLKMODE_EXT_3CLK;
+			i2smfdl->clk_mode = I2SMFDL_CLKMODE_EXT_3CLK;
+			}else
+			if (!strncmp(output, "HIBCLK", sizeof("HIBCLK"))) {
+				i2smfdl->clk_mode = I2SMFDL_CLKMODE_HIBCLK;
+				/* check */
+				if ((dai->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBS_CFS ) {
+					dev_warn(dev, "dai_fmt not set CBS_CFS mode in hibclk mode.");
+				}
 			}
 		}
 
@@ -709,9 +753,15 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 			}
 			i2smfdl->clks_num = freq_num + clk_num;
 		}
+
+		/* check */
 		if (i2smfdl->clks_num == 0) {
 			// set internal pll only when nothing external clk
 			i2smfdl->clksel_order = I2SMFDL_CLKSEL_ORDER_PLL;
+			dev_warn(dev, "not found clocks in ext 1clk mode.");
+		}
+		if ((dai->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBM_CFS ) {
+			dev_warn(dev, "dai_fmt not set CBM_CFS mode in ext 1clk mode.");
 		}
 	}else
 	if (i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_3CLK){
@@ -720,17 +770,28 @@ static void snd_i2smfdl_parse_device_tree_options(struct device *dev, struct i2s
 		i2smfdl->clks[0].clk = clk_get(dev, "mclk");
 		i2smfdl->clks[1].clk = clk_get(dev, "bclk");
 		i2smfdl->clks[2].clk = clk_get(dev, "lrclk");
+
+		/* check */
+		if (!i2smfdl->clks[1].clk || !i2smfdl->clks[2].clk) {
+			dev_warn(dev, "BCLK and LRCLK required in ext 3clk mode.");
+		}
+		if ((dai->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) != SND_SOC_DAIFMT_CBM_CFM ) {
+			dev_warn(dev, "dai_fmt not set CBM_CFM mode in ext 3clk mode.");
+		}
 	}
 
 	/* setup clock calculate options */
 	{
 		of_property_read_u32(dev->of_node, "min_bclk", &i2smfdl->min_bclk);
+		of_property_read_u32(dev->of_node, "min_mclk", &i2smfdl->min_mclk);
 		of_property_read_u32(dev->of_node, "min_fs", &i2smfdl->min_fs);
 		of_property_read_u32(dev->of_node, "max_fs", &i2smfdl->max_fs);
 		of_property_read_u32(dev->of_node, "max_rate", &i2smfdl->max_rate);
 		if (!i2smfdl->max_rate) i2smfdl->max_rate = 768000;
 		of_property_read_u32(dev->of_node, "min_rate", &i2smfdl->min_rate);
 		if (!i2smfdl->min_rate) i2smfdl->min_rate = 8000;
+		of_property_read_u32(dev->of_node, "intpll_fallback", &i2smfdl->intpll_fallback);
+		if (i2smfdl->intpll_fallback) dev_info(dev, "allow internal pll fallback operation.");
 	}
 
 	return;
@@ -837,8 +898,13 @@ static int snd_i2smfdl_probe(struct platform_device *pdev)
 	snd_i2smfdl.controls        = i2smfdl_snd_controls;
 	snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls);
 	if (i2smfdl->clks_num && i2smfdl->clk_mode == I2SMFDL_CLKMODE_EXT_1CLK){
-		snd_i2smfdl.controls        = i2smfdl_snd_controls_clk;
-		snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls_clk);
+		if (i2smfdl->intpll_fallback) {
+			snd_i2smfdl.controls        = i2smfdl_snd_controls_clk;
+			snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls_clk);
+		} else {
+			snd_i2smfdl.controls        = i2smfdl_snd_controls_clk_wopll;
+			snd_i2smfdl.num_controls    = ARRAY_SIZE(i2smfdl_snd_controls_clk_wopll);
+		}
 	}
 
 	// sound card register

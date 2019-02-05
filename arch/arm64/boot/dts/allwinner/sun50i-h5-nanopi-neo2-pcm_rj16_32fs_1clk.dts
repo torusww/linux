@@ -63,9 +63,11 @@
 		max_fs  = <2048>;
 
 		daifmt_master_override = "CBM_CFS";
-	        daifmt_audio_override = "RJ";
-	        daifmt_polarity_override = "NB_IF";
-	        rj_slotwidth = <16>;
+		clk_mode = "EXT_1CLK";
+		intpll_fallback = <1>;
+		daifmt_audio_override = "RJ";
+		daifmt_polarity_override = "NB_IF";
+		rj_slotwidth = <16>;
 	};
 };
 

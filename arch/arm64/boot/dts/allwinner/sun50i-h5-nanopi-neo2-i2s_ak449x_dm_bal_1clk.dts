@@ -58,11 +58,13 @@
 		en-gpios = <&pio 6 11 GPIO_ACTIVE_HIGH>, <&pio 6 6 GPIO_ACTIVE_HIGH>;
 		clocks = <&si514>;
 
+		daifmt_master_override = "CBM_CFS";
+		clk_mode = "EXT_1CLK";
+		intpll_fallback = <1>;
 		min_clk = <20000000>; /* min mclk/bclk */
 		min_fs  = <64>; /* 0 = slotwidth * 2 */
 		max_fs  = <2048>;
 
-		daifmt_master_override = "CBM_CFS";
 	};
 };
 

@@ -56,13 +56,12 @@
 		daifmt_audio_override = "RJ";
 		daifmt_polarity_override = "NB_IF";
 
+		daifmt_master_override = "CBM_CFM";
 		clk_mode = "EXT_3CLK";
 		clocks = <&si5351 0>, <&si5351 1>, <&si5351 2>;
 		clock-names = "mclk", "bclk", "lrclk";
-		min_bclk = <20000000>;
+		min_mclk = <20000000>;
 		min_fs = <64>;
-
-		daifmt_master_override = "CBM_CFM";
 	};
 
 	clocks {
