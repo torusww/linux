@@ -293,7 +293,7 @@ static int sun8i_i2s_set_clock(struct priv *priv, unsigned long rate, int sample
 	period = sun8i_i2s_lrclk_period_minimum_match(priv, sample_resolution);
 	DBGOUT("%s: rate = %lu. sample_resolution = %d period = %d", __func__, rate, sample_resolution, period);
 
-	if ( (priv->dai_fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_CBS_CFS) {
+	if ( (priv->dai_fmt & SND_SOC_DAIFMT_MASTER_MASK) == SND_SOC_DAIFMT_CBS_CFS) {
 		/* compute the sys clock rate and divide values */
 		if (priv->div) {
 			div = priv->div;
