@@ -28,6 +28,7 @@ struct nullcodec_priv {
 	unsigned long mute_prewait;
 	unsigned long mute_postwait;
 	unsigned long reset_holdtime;
+	unsigned long reset_postwait;
 	unsigned long x4_freq;
 };
 
@@ -61,21 +62,6 @@ static int nullcodec_set_dai_mute(struct snd_soc_dai *dai, int mute)
 	return 0;
 }
 
-static int nullcodec_startup(struct snd_pcm_substream *substream,
-		struct snd_soc_dai *dai)
-{
-	struct snd_soc_codec *codec = dai->codec;
-	struct nullcodec_priv *priv = snd_soc_codec_get_drvdata(codec);
-
-	if (priv->reset_gpiod) {
-		gpiod_set_value_cansleep(priv->reset_gpiod, 1);
-		mdelay(priv->reset_holdtime);
-		gpiod_set_value_cansleep(priv->reset_gpiod, 0);
-	}
-
-	return 0;
-}
-
 static int nullcodec_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params,
 		struct snd_soc_dai *dai)
@@ -90,9 +76,25 @@ static int nullcodec_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static int nullcodec_init(struct snd_soc_codec *codec)
+{
+	struct nullcodec_priv *priv = snd_soc_codec_get_drvdata(codec);
+
+	dev_dbg(codec->dev, "%s \n", __FUNCTION__);
+
+	if (priv->reset_gpiod) {
+		dev_info(codec->dev, "reset assert. \n");
+		gpiod_set_value_cansleep(priv->reset_gpiod, 1);
+		mdelay(priv->reset_holdtime);
+		gpiod_set_value_cansleep(priv->reset_gpiod, 0);
+		if ( priv->reset_postwait ) mdelay(priv->reset_postwait);
+	}
+
+	return 0;
+}
 
 static struct snd_soc_dai_ops nullcodec_dai_ops = {
-	.startup        = nullcodec_startup,
+//	.startup        = nullcodec_startup,
 	.hw_params      = nullcodec_hw_params,
 	//        .set_fmt        = nullcodec_set_dai_fmt,
 	.digital_mute   = nullcodec_set_dai_mute,
@@ -114,7 +116,9 @@ static struct snd_soc_dai_driver nullcodec_dai = {
 	.ops = &nullcodec_dai_ops,
 };
 
-static struct snd_soc_codec_driver soc_codec_dev_nullcodec;
+static struct snd_soc_codec_driver soc_codec_dev_nullcodec = {
+	.probe = nullcodec_init,
+};
 
 static int nullcodec_probe(struct platform_device *pdev)
 {
@@ -162,7 +166,6 @@ static int nullcodec_probe(struct platform_device *pdev)
 	}
 
 	num = of_property_read_variable_u32_array(pdev->dev.of_node, "bits", bits_array, 0, 8);
-	if ( num < 0 ) dev_err(&pdev->dev, "device-tree [bits] field error.");
 	if ( num > 0 ) {
 		fmt = 0;
 		for ( i = 0; i < num; i++ ) {
@@ -201,6 +204,12 @@ static int nullcodec_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "reset hold time set to %d ms", val);
 		priv->reset_holdtime = val;
 	}
+	ret = of_property_read_u32(pdev->dev.of_node, "reset_postwait", &val);
+	if (ret == 0){
+		dev_info(&pdev->dev, "reset post wait set to %d ms", val);
+		priv->reset_postwait = val;
+	}
+
 
 	priv->x4_freq = 100000;
 	ret = of_property_read_u32(pdev->dev.of_node, "x4_freq", &val);
