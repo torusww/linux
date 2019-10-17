@@ -370,23 +370,31 @@ static int snd_i2smfdl_set_ext3clk(struct snd_pcm_substream *substream, struct s
 	while ( bclk <= i2smfdl->min_bclk )
 		bclk = bclk << 1;
 
+	
+	if (params_format(params)==SNDRV_PCM_FORMAT_DSD_U32_LE){
+		lrclk++;
+	}
+
 	/* clk setup */
 	snd_i2smfdl_set_daifmt(substream, SND_SOC_DAIFMT_CBM_CFM);
 
-	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_set_rate(i2smfdl->clks[0].clk, mclk);
-	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_set_rate(i2smfdl->clks[1].clk, bclk);
+//	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_set_rate(i2smfdl->clks[0].clk, mclk);
+//	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_set_rate(i2smfdl->clks[1].clk, bclk);
 	if (!IS_ERR(i2smfdl->clks[2].clk)) clk_set_rate(i2smfdl->clks[2].clk, lrclk);
 
-	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_prepare_enable(i2smfdl->clks[0].clk);
-	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_prepare_enable(i2smfdl->clks[1].clk);
+//	if (!IS_ERR(i2smfdl->clks[0].clk)) clk_prepare_enable(i2smfdl->clks[0].clk);
+//	if (!IS_ERR(i2smfdl->clks[1].clk)) clk_prepare_enable(i2smfdl->clks[1].clk);
 	if (!IS_ERR(i2smfdl->clks[2].clk)) clk_prepare_enable(i2smfdl->clks[2].clk);
 	err = snd_soc_dai_set_bclk_ratio(cpu_dai, fs);
 
+/*
 	if (!IS_ERR(i2smfdl->clks[0].clk)){
 		real_freq = clk_get_rate(i2smfdl->clks[0].clk);
 	}else{
+	        dev_dbg(rtd->dev, "is_err %s" , __FUNCTION__);
 		real_freq = clk_get_rate(i2smfdl->clks[1].clk);
 	}
+*/
 	dev_dbg(rtd->dev, "%s clk_set_rate = %ld / clk_get_rate = %ld / bclk = %ld / lrclk = %ld / fs = %d / sw = %d" , __FUNCTION__, mclk, real_freq, bclk, lrclk, fs, params_width(params));
 
 	return err;

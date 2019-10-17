@@ -660,6 +660,8 @@ static int ak449x_hw_params(struct snd_pcm_substream *substream,
 	int pcm_width = max(params_physical_width(params), ak449x->slot_width);
 	int nfs1;
 	u8 format;
+	int rate;
+	int isdsd=0;
 
 
 	nfs1 = params_rate(params);
@@ -709,9 +711,27 @@ static int ak449x_hw_params(struct snd_pcm_substream *substream,
 	default:
 		return -EINVAL;
 	}
+	if (params_format(params)==SNDRV_PCM_FORMAT_DSD_U32_LE){
+		isdsd=1;	
+	}
+	rate = params_rate(params);
+	if(isdsd){
+		if((rate ==88200)||(rate ==96000)){
+			snd_soc_update_bits(codec, AK449X_06_DSD1, AK449X_DSDSEL_MASK, 0);
+			snd_soc_update_bits(codec, AK449X_02_CONTROL3, AK449X_DP_MASK, AK449X_DP);
+		}
+		else if((rate ==176400)||(rate ==192000)){
+			snd_soc_update_bits(codec, AK449X_06_DSD1, AK449X_DSDSEL_MASK, 1);
+			snd_soc_update_bits(codec, AK449X_02_CONTROL3, AK449X_DP_MASK, AK449X_DP);
+		}
+		else 
+			return -EINVAL;
+	}
+	else
+		snd_soc_update_bits(codec, AK449X_02_CONTROL3, AK449X_DP_MASK, 0);
 
 	snd_soc_update_bits(codec, AK449X_00_CONTROL1, AK449X_DIF_MASK, format);
-	dev_dbg(codec->dev, "%s set dif format = %x\n", __FUNCTION__, format);
+	dev_dbg(codec->dev, "%s set dif format = %x isdsd=%d rate=%d\n", __FUNCTION__, format,isdsd,rate);
 
 	ak449x_rstn_control(codec, 0);
 	ak449x_rstn_control(codec, 1);
@@ -887,6 +907,7 @@ static void ak449x_parse_device_tree_options(struct device *dev, struct ak449x_p
 
 #define AK449X_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE |\
 			 SNDRV_PCM_FMTBIT_S24_LE |\
+			 SNDRV_PCM_FMTBIT_DSD_U32_LE |\
 			 SNDRV_PCM_FMTBIT_S32_LE)
 
 static int ak449x_startup(struct snd_pcm_substream *substream,
@@ -939,9 +960,11 @@ static int ak449x_init(struct snd_soc_codec *codec)
 {
 	struct ak449x_priv *ak449x = snd_soc_codec_get_drvdata(codec);
 	int err;
+	int trycnt=0;
 
 	dev_dbg(codec->dev, "%s\n", __FUNCTION__);
 	/* External Mute ON */
+mytry:
 	if (ak449x->mute_gpiod)
 		gpiod_set_value_cansleep(ak449x->mute_gpiod, 1);
 
@@ -954,8 +977,13 @@ static int ak449x_init(struct snd_soc_codec *codec)
 	err = snd_soc_update_bits(codec, AK449X_00_CONTROL1, 0x80, 0x80);   /* ACKS bit = 1; 10000000 */
 
 	if (err < 0) {
-		dev_err(codec->dev, "i2c failed.");
-		return err;
+		dev_err(codec->dev, "i2c failed. trycnt=%d",trycnt);
+		if(trycnt>20) 
+			return err;
+		else{ 
+			trycnt++;
+			goto mytry;
+		}
 	}
 	ak449x_chmode_set(codec);
 	ak449x_phase_set(codec);

@@ -144,6 +144,7 @@
 	(SNDRV_PCM_FMTBIT_S16_LE | \
 	 SNDRV_PCM_FMTBIT_S20_3LE | \
 	 SNDRV_PCM_FMTBIT_S24_LE | \
+	 SNDRV_PCM_FMTBIT_DSD_U32_LE | \
 	 SNDRV_PCM_FMTBIT_S32_LE)
 
 #define PCM_LRCK_PERIOD 32
@@ -532,6 +533,9 @@ static int sun8i_i2s_hw_params(struct snd_pcm_substream *substream,
 		sample_resolution = 24;
 		break;
 	case SNDRV_PCM_FORMAT_S32_LE:
+		sample_resolution = 32;
+		break;
+	case SNDRV_PCM_FORMAT_DSD_U32_LE:
 		sample_resolution = 32;
 		break;
 	default:

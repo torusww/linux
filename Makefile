@@ -1,8 +1,10 @@
 VERSION = 4
 PATCHLEVEL = 11
 SUBLEVEL = 12
-EXTRAVERSION =
+EXTRAVERSION = +
 NAME = Fearless Coyote
+ARCH = arm64
+CROSS_COMPILE = aarch64-linux-gnu-
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

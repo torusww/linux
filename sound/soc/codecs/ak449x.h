@@ -87,6 +87,8 @@
 #define AK449X_GAINCNT_MASK	GENMASK(3,1)
 #define AK449X_GAINCNT_SHIFT	1
 
+#define AK449X_DP_MASK	GENMASK(7,7)
+#define AK449X_DP	(0x1<<7)
 /* DAC Digital attenuator transition time setting
  * Table 19
  * Mode	ATS1	ATS2	ATT speed
@@ -97,6 +99,7 @@
  * */
 #define AK449X_ATS_SHIFT	6
 #define AK449X_ATS_MASK		GENMASK(7, 6)
+#define AK449X_DSDSEL_MASK	GENMASK(0,0)
 
 #endif /* _AK449X_H */
 
