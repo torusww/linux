@@ -114,7 +114,7 @@ static inline int si5351_bulk_read(struct si5351_driver_data *drvdata,
 static inline int si5351_reg_write(struct si5351_driver_data *drvdata,
 				   u8 reg, u8 val)
 {
-	printk(KERN_INFO "%s reg=%d val=%d",__func__,reg,val);
+	printk(KERN_INFO "%s reg=%d val=%x",__func__,reg,val);
 	return regmap_write(drvdata->regmap, reg, val);
 }
 
@@ -1681,6 +1681,7 @@ static int si5351_i2c_probe(struct i2c_client *client,
 
 		/* set initial clkout rate */
 		if (pdata->clkout[n].rate != 0) {
+/*
 			int ret;
 			ret = clk_set_rate(drvdata->clkout[n].hw.clk,
 					   pdata->clkout[n].rate);
@@ -1688,6 +1689,7 @@ static int si5351_i2c_probe(struct i2c_client *client,
 				dev_err(&client->dev, "Cannot set rate : %d\n",
 					ret);
 			}
+*/
 		}
 	}
 
