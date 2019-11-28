@@ -27,6 +27,7 @@ dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-pcm_rj16_32fs_1clk.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-spdif.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2_fbtft.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s_3clk_si5351.dtb
+dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-my.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s_2clk_si5351.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-pcm_rj24_3clk_si5351.dtb
 dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h5-nanopi-neo2-i2s_ak449x_3clk_si5351.dtb
